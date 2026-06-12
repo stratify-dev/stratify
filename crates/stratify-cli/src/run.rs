@@ -45,15 +45,6 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
     Ok(Report::new(findings))
 }
 
-/// Analyze `root` and render the report in the given format.
-pub fn run(root: &Path, format: Format) -> std::io::Result<String> {
-    let report = analyze_repo(root)?;
-    Ok(match format {
-        Format::Human => stratify_report::human::render(&report),
-        Format::Json => stratify_report::json::render(&report),
-    })
-}
-
 /// Returns true if any finding in `report` has severity >= `threshold`.
 pub fn gate(report: &Report, threshold: Severity) -> bool {
     report.findings.iter().any(|f| f.severity >= threshold)
@@ -77,10 +68,12 @@ mod tests {
         )
         .unwrap();
 
-        let out = run(&dir, Format::Human).unwrap();
+        let report = analyze_repo(&dir).unwrap();
+
+        let out = stratify_report::human::render(&report);
         assert!(out.contains("unusedHelper"), "got: {out}");
 
-        let json = run(&dir, Format::Json).unwrap();
+        let json = stratify_report::json::render(&report);
         assert!(json.contains("\"schema_version\": 1"));
         let _ = std::fs::remove_dir_all(&dir);
     }
