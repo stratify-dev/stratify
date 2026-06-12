@@ -97,7 +97,66 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         }
     }
 
+    // Second pass: intra-file calls. Resolve a (method_invocation name) against
+    // method names defined in this file. Unresolved calls are skipped in M1.
+    let name_to_id: std::collections::HashMap<String, SymbolId> = g
+        .symbols()
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Function))
+        .map(|s| (s.name.clone(), s.id))
+        .collect();
+
+    let call_query = Query::new(
+        &tree_sitter_java::LANGUAGE.into(),
+        r#"
+        (method_invocation
+          name: (identifier) @call.name) @call.node
+        "#,
+    )
+    .expect("valid call query");
+
+    let call_name_idx = call_query.capture_index_for_name("call.name").unwrap();
+    let call_node_idx = call_query.capture_index_for_name("call.node").unwrap();
+
+    // Map each call site to the enclosing method by walking ancestors.
+    let mut call_cursor = QueryCursor::new();
+    let mut call_matches = call_cursor.matches(&call_query, root, src.as_bytes());
+    while let Some(m) = call_matches.next() {
+        let mut callee_name = None;
+        let mut call_node = None;
+        for cap in m.captures {
+            if cap.index == call_name_idx {
+                callee_name = Some(text(cap.node, src).to_string());
+            } else if cap.index == call_node_idx {
+                call_node = Some(cap.node);
+            }
+        }
+        let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else { continue };
+        let Some(&callee_id) = name_to_id.get(&callee_name) else { continue };
+        let Some(caller_id) = enclosing_method_id(call_node, &g, file) else { continue };
+        g.add_reference(Reference {
+            from: caller_id,
+            to: callee_id,
+            kind: RefKind::Calls,
+            span: span(file, call_node),
+            confidence: Confidence::Likely,
+        });
+    }
+
     g
+}
+
+/// Find the method that lexically encloses `node` by matching byte ranges against
+/// known method symbols in this file's graph.
+fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> {
+    let pos = node.start_byte();
+    g.symbols()
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Function) && s.span.file == file)
+        .filter(|s| s.span.start_byte <= pos && pos < s.span.end_byte)
+        // Innermost enclosing method = smallest span.
+        .min_by_key(|s| s.span.end_byte - s.span.start_byte)
+        .map(|s| s.id)
 }
 
 #[cfg(test)]
@@ -121,5 +180,15 @@ mod tests {
         let g = extract("A.java", src);
         // One Defines edge for class A, one for method m.
         assert_eq!(g.references().iter().filter(|r| matches!(r.kind, RefKind::Defines)).count(), 2);
+    }
+
+    #[test]
+    fn records_intra_file_call_edge() {
+        let src = "class A {\n  void a() { b(); }\n  void b() {}\n}\n";
+        let g = extract("A.java", src);
+        let a_id = g.symbols().iter().find(|s| s.name == "a").unwrap().id;
+        let b_id = g.symbols().iter().find(|s| s.name == "b").unwrap().id;
+        assert!(g.references().iter().any(|r|
+            matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
     }
 }
