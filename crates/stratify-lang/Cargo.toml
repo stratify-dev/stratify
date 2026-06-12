@@ -1,0 +1,5 @@
+[package]
+name = "stratify-lang"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
