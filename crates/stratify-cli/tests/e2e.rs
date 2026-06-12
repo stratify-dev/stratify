@@ -18,4 +18,5 @@ fn sample_java_reports_unused_methods() {
     // `neverCalled` is never reached -> unused (warning).
     assert!(stdout.contains("neverCalled"), "stdout: {stdout}");
     assert!(stdout.contains("warn"), "stdout: {stdout}");
+    assert!(stdout.contains("helper") && stdout.contains("possibly unused"), "stdout: {stdout}");
 }

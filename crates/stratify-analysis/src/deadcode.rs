@@ -2,10 +2,11 @@ use std::collections::HashSet;
 use stratify_core::ir::SymbolId;
 use stratify_core::{Confidence, Finding, IrGraph, RefKind, Severity, SymbolKind};
 
-/// A symbol is an entrypoint if its name matches a known root. For M1 (Java),
-/// `main` methods are roots. File symbols are always roots (they anchor defines).
+/// A symbol is an entrypoint if it is a function named `main`. For M1 (Java),
+/// `main` methods are the only roots. Framework and file-based roots come in a
+/// later milestone.
 fn is_entrypoint(name: &str, kind: SymbolKind) -> bool {
-    matches!(kind, SymbolKind::File) || (matches!(kind, SymbolKind::Function) && name == "main")
+    matches!(kind, SymbolKind::Function) && name == "main"
 }
 
 /// Find functions that no entrypoint can reach via Calls/Defines edges.
@@ -130,5 +131,45 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Info);
         assert!(findings[0].message.contains("possibly unused"));
+    }
+
+    #[test]
+    fn file_defines_does_not_make_methods_reachable() {
+        // Regression: File entrypoint + Defines traversal used to mark every
+        // method reachable, so nothing was ever flagged. Defines is structural
+        // containment, not a use-edge, and must not confer reachability.
+        use stratify_core::ir::{Reference, Span, Symbol, Visibility};
+
+        let mut g = IrGraph::new();
+        let file_id = g.add_symbol(Symbol {
+            id: SymbolId(0),
+            kind: SymbolKind::File,
+            name: "Foo.java".into(),
+            fqn: "Foo.java".into(),
+            span: Span { file: "Foo.java".into(), start_byte: 0, end_byte: 100, start_line: 1 },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
+        let orphan = g.add_symbol(Symbol {
+            id: SymbolId(0),
+            kind: SymbolKind::Function,
+            name: "orphan".into(),
+            fqn: "orphan".into(),
+            span: Span { file: "Foo.java".into(), start_byte: 0, end_byte: 10, start_line: 2 },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
+        g.add_reference(Reference {
+            from: file_id,
+            to: orphan,
+            kind: RefKind::Defines,
+            span: Span { file: "Foo.java".into(), start_byte: 0, end_byte: 10, start_line: 2 },
+            confidence: Confidence::Certain,
+        });
+
+        let findings = analyze(&g);
+        assert_eq!(findings.len(), 1, "File --Defines--> orphan must not make orphan reachable");
+        assert_eq!(findings[0].severity, Severity::Warning);
+        assert!(findings[0].message.contains("orphan"));
     }
 }
