@@ -3,3 +3,7 @@ name = "stratify-report"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+
+[dependencies]
+stratify-core = { path = "../stratify-core" }
+serde_json = { workspace = true }
