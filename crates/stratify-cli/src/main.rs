@@ -1,9 +1,9 @@
 mod run;
 
-use std::path::PathBuf;
-use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use run::Format;
+use std::path::PathBuf;
+use std::process::ExitCode;
 use stratify_core::Severity;
 
 #[derive(Parser)]
@@ -66,7 +66,11 @@ impl FailOn {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Check { path, format, fail_on } => {
+        Command::Check {
+            path,
+            format,
+            fail_on,
+        } => {
             let report = match run::analyze_repo(&path) {
                 Ok(r) => r,
                 Err(e) => {

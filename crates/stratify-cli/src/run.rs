@@ -1,5 +1,5 @@
-use std::path::Path;
 use ignore::WalkBuilder;
+use std::path::Path;
 use stratify_analysis::deadcode;
 use stratify_core::{IrGraph, Report, Severity};
 use stratify_lang::LanguageAdapter;
@@ -35,7 +35,11 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
             None => continue,
         };
         let source = std::fs::read_to_string(path)?;
-        let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_string();
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
         if let Ok(file_graph) = adapter.parse_file(&rel, &source) {
             graph.merge(file_graph);
         }
@@ -53,9 +57,9 @@ pub fn gate(report: &Report, threshold: Severity) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stratify_core::{Finding, Severity};
     use stratify_core::confidence::Confidence;
     use stratify_core::ir::Span;
+    use stratify_core::{Finding, Severity};
 
     #[test]
     fn run_flags_unused_method_in_temp_repo() {
@@ -83,7 +87,12 @@ mod tests {
             rule: "dead_code".into(),
             severity,
             message: "unused".into(),
-            span: Span { file: "A.java".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "A.java".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             confidence: Confidence::Certain,
         }])
     }
@@ -91,9 +100,18 @@ mod tests {
     #[test]
     fn gate_trips_at_threshold_and_below() {
         let report = make_report(Severity::Warning);
-        assert!(gate(&report, Severity::Warning), "warning report should trip at Warning threshold");
-        assert!(gate(&report, Severity::Info), "warning report should trip at Info threshold");
-        assert!(!gate(&report, Severity::Error), "warning report should NOT trip at Error threshold");
+        assert!(
+            gate(&report, Severity::Warning),
+            "warning report should trip at Warning threshold"
+        );
+        assert!(
+            gate(&report, Severity::Info),
+            "warning report should trip at Info threshold"
+        );
+        assert!(
+            !gate(&report, Severity::Error),
+            "warning report should NOT trip at Error threshold"
+        );
     }
 
     #[test]

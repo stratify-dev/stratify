@@ -29,7 +29,13 @@ mod tests {
 
     #[test]
     fn min_with_picks_weaker() {
-        assert_eq!(Confidence::Certain.min_with(Confidence::Unknown), Confidence::Unknown);
-        assert_eq!(Confidence::Likely.min_with(Confidence::Certain), Confidence::Likely);
+        assert_eq!(
+            Confidence::Certain.min_with(Confidence::Unknown),
+            Confidence::Unknown
+        );
+        assert_eq!(
+            Confidence::Likely.min_with(Confidence::Certain),
+            Confidence::Likely
+        );
     }
 }

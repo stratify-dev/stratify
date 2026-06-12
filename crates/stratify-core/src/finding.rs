@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::confidence::Confidence;
 use crate::ir::Span;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -31,7 +31,10 @@ impl Report {
     pub const SCHEMA_VERSION: u32 = 1;
 
     pub fn new(findings: Vec<Finding>) -> Self {
-        Report { schema_version: Self::SCHEMA_VERSION, findings }
+        Report {
+            schema_version: Self::SCHEMA_VERSION,
+            findings,
+        }
     }
 }
 
@@ -52,7 +55,12 @@ mod tests {
             rule: "dead_code".into(),
             severity: Severity::Warning,
             message: "unused method bar".into(),
-            span: Span { file: "Foo.java".into(), start_byte: 0, end_byte: 1, start_line: 3 },
+            span: Span {
+                file: "Foo.java".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 3,
+            },
             confidence: Confidence::Certain,
         }]);
         let v: serde_json::Value = serde_json::to_value(&report).unwrap();

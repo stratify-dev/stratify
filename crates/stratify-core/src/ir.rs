@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::confidence::Confidence;
+use serde::{Deserialize, Serialize};
 
 /// Stable identifier for a symbol within one IrGraph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -76,7 +76,12 @@ mod tests {
             kind: SymbolKind::Class,
             name: "Foo".into(),
             fqn: "com.acme.Foo".into(),
-            span: Span { file: "Foo.java".into(), start_byte: 0, end_byte: 10, start_line: 1 },
+            span: Span {
+                file: "Foo.java".into(),
+                start_byte: 0,
+                end_byte: 10,
+                start_line: 1,
+            },
             visibility: Visibility::Public,
             confidence: Confidence::Certain,
         };

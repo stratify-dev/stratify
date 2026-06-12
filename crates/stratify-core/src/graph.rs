@@ -65,7 +65,12 @@ mod tests {
             kind: SymbolKind::Function,
             name: name.into(),
             fqn: name.into(),
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Public,
             confidence: Confidence::Certain,
         }
@@ -90,8 +95,15 @@ mod tests {
         let x = g2.add_symbol(sym("x"));
         let y = g2.add_symbol(sym("y"));
         g2.add_reference(Reference {
-            from: x, to: y, kind: RefKind::Calls,
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            from: x,
+            to: y,
+            kind: RefKind::Calls,
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             confidence: Confidence::Certain,
         });
 

@@ -87,7 +87,12 @@ mod tests {
             kind: SymbolKind::Function,
             name: name.into(),
             fqn: name.into(),
-            span: Span { file: "T.java".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "T.java".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         })
@@ -95,8 +100,15 @@ mod tests {
 
     fn edge(g: &mut IrGraph, from: SymbolId, to: SymbolId, conf: Confidence) {
         g.add_reference(Reference {
-            from, to, kind: RefKind::Calls,
-            span: Span { file: "T.java".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            from,
+            to,
+            kind: RefKind::Calls,
+            span: Span {
+                file: "T.java".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             confidence: conf,
         });
     }
@@ -146,7 +158,12 @@ mod tests {
             kind: SymbolKind::File,
             name: "Foo.java".into(),
             fqn: "Foo.java".into(),
-            span: Span { file: "Foo.java".into(), start_byte: 0, end_byte: 100, start_line: 1 },
+            span: Span {
+                file: "Foo.java".into(),
+                start_byte: 0,
+                end_byte: 100,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });
@@ -155,7 +172,12 @@ mod tests {
             kind: SymbolKind::Function,
             name: "orphan".into(),
             fqn: "orphan".into(),
-            span: Span { file: "Foo.java".into(), start_byte: 0, end_byte: 10, start_line: 2 },
+            span: Span {
+                file: "Foo.java".into(),
+                start_byte: 0,
+                end_byte: 10,
+                start_line: 2,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });
@@ -163,12 +185,21 @@ mod tests {
             from: file_id,
             to: orphan,
             kind: RefKind::Defines,
-            span: Span { file: "Foo.java".into(), start_byte: 0, end_byte: 10, start_line: 2 },
+            span: Span {
+                file: "Foo.java".into(),
+                start_byte: 0,
+                end_byte: 10,
+                start_line: 2,
+            },
             confidence: Confidence::Certain,
         });
 
         let findings = analyze(&g);
-        assert_eq!(findings.len(), 1, "File --Defines--> orphan must not make orphan reachable");
+        assert_eq!(
+            findings.len(),
+            1,
+            "File --Defines--> orphan must not make orphan reachable"
+        );
         assert_eq!(findings[0].severity, Severity::Warning);
         assert!(findings[0].message.contains("orphan"));
     }

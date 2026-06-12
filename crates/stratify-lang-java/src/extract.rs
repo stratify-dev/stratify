@@ -131,9 +131,15 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 call_node = Some(cap.node);
             }
         }
-        let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else { continue };
-        let Some(&callee_id) = name_to_id.get(&callee_name) else { continue };
-        let Some(caller_id) = enclosing_method_id(call_node, &g, file) else { continue };
+        let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
+            continue;
+        };
+        let Some(&callee_id) = name_to_id.get(&callee_name) else {
+            continue;
+        };
+        let Some(caller_id) = enclosing_method_id(call_node, &g, file) else {
+            continue;
+        };
         g.add_reference(Reference {
             from: caller_id,
             to: callee_id,
@@ -168,7 +174,11 @@ mod tests {
     fn extracts_class_and_method() {
         let src = "public class Foo {\n  void bar() {}\n}\n";
         let g = extract("Foo.java", src);
-        let kinds: Vec<_> = g.symbols().iter().map(|s| (s.kind, s.name.as_str())).collect();
+        let kinds: Vec<_> = g
+            .symbols()
+            .iter()
+            .map(|s| (s.kind, s.name.as_str()))
+            .collect();
         assert!(kinds.contains(&(SymbolKind::File, "Foo.java")));
         assert!(kinds.contains(&(SymbolKind::Class, "Foo")));
         assert!(kinds.contains(&(SymbolKind::Function, "bar")));
@@ -179,7 +189,13 @@ mod tests {
         let src = "class A { void m() {} }";
         let g = extract("A.java", src);
         // One Defines edge for class A, one for method m.
-        assert_eq!(g.references().iter().filter(|r| matches!(r.kind, RefKind::Defines)).count(), 2);
+        assert_eq!(
+            g.references()
+                .iter()
+                .filter(|r| matches!(r.kind, RefKind::Defines))
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -188,7 +204,9 @@ mod tests {
         let g = extract("A.java", src);
         let a_id = g.symbols().iter().find(|s| s.name == "a").unwrap().id;
         let b_id = g.symbols().iter().find(|s| s.name == "b").unwrap().id;
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
     }
 }

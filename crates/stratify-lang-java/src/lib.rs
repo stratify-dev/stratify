@@ -27,7 +27,9 @@ mod tests {
     fn adapter_parses_a_class() {
         let a = JavaAdapter;
         assert!(a.handles_extension("java"));
-        let g = a.parse_file("Foo.java", "class Foo { void bar() {} }").unwrap();
+        let g = a
+            .parse_file("Foo.java", "class Foo { void bar() {} }")
+            .unwrap();
         assert!(g.symbols().iter().any(|s| s.name == "bar"));
     }
 }

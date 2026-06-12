@@ -34,8 +34,12 @@ mod tests {
 
     struct Noop;
     impl LanguageAdapter for Noop {
-        fn language(&self) -> &'static str { "noop" }
-        fn handles_extension(&self, ext: &str) -> bool { ext == "noop" }
+        fn language(&self) -> &'static str {
+            "noop"
+        }
+        fn handles_extension(&self, ext: &str) -> bool {
+            ext == "noop"
+        }
         fn parse_file(&self, _path: &str, _source: &str) -> Result<IrGraph, AdapterError> {
             Ok(IrGraph::new())
         }

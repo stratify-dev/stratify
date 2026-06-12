@@ -17,7 +17,12 @@ mod tests {
             rule: "dead_code".into(),
             severity: Severity::Warning,
             message: "unused function `orphan`".into(),
-            span: Span { file: "T.java".into(), start_byte: 0, end_byte: 1, start_line: 5 },
+            span: Span {
+                file: "T.java".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 5,
+            },
             confidence: Confidence::Certain,
         }]);
         let out = render(&report);
