@@ -13,7 +13,7 @@ Early development (M1 walking skeleton). Working today:
 ## Install
 
 ```sh
-cargo install --git https://github.com/stratify-dev/stratify stratify-cli
+cargo install --git https://github.com/stratify-dev/stratify stratify-cli --locked
 ```
 
 The binary is `stratify`.
@@ -40,7 +40,7 @@ info  App.java:6  possibly unused function `helper`
 2 finding(s).
 ```
 
-`--fail-on` accepts `never` (default, always exits 0), `info`, `warning`, or `error`.
+`--fail-on` accepts `never` (default, always exits 0), `info`, `warning`, or `error`. The GitHub Action input `fail-on` defaults to `warning` instead, so dead code fails the build.
 
 ## Use as a GitHub Action
 
@@ -48,11 +48,13 @@ Add Stratify as a quality gate in any workflow:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@v1
+- uses: stratify-dev/stratify@main
   with:
     path: .
     fail-on: warning
 ```
+
+Pin to a released tag (for example `@v1`) once releases are published. `@main` tracks the latest.
 
 The first run compiles Stratify from source, which takes a few minutes.
 
