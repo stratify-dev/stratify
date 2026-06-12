@@ -77,7 +77,7 @@ members = [
 edition = "2021"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/dynaum/stratify"
+repository = "https://github.com/stratify-dev/stratify"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
