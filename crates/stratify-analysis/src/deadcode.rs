@@ -34,7 +34,7 @@ pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
             if r.from != node {
                 continue;
             }
-            if !matches!(r.kind, RefKind::Calls | RefKind::Defines | RefKind::Inherits) {
+            if !matches!(r.kind, RefKind::Calls | RefKind::Inherits) {
                 continue;
             }
             let edge_certain = path_certain && r.confidence == Confidence::Certain;
