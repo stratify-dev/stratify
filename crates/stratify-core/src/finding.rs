@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::confidence::Confidence;
 use crate::ir::Span;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Info,
@@ -39,6 +39,12 @@ impl Report {
 mod tests {
     use super::*;
     use crate::ir::Span;
+
+    #[test]
+    fn severity_ordering_info_lt_warning_lt_error() {
+        assert!(Severity::Info < Severity::Warning);
+        assert!(Severity::Warning < Severity::Error);
+    }
 
     #[test]
     fn report_serializes_with_schema_version() {
