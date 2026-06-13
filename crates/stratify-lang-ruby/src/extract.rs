@@ -236,19 +236,29 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let mut call_cursor = QueryCursor::new();
     let mut call_matches = call_cursor.matches(&call_query, root, src.as_bytes());
     let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
+    let mut unresolved: Vec<(SymbolId, String)> = Vec::new();
     while let Some(m) = call_matches.next() {
         for cap in m.captures {
             if cap.index == callee_idx {
                 let callee_name = text(cap.node, src);
+                let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                 if let Some(&callee_id) = name_to_id.get(callee_name) {
-                    let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                     edges.push((from, callee_id));
+                } else {
+                    unresolved.push((from, callee_name.to_string()));
                 }
             }
         }
     }
 
     // Query B: bare identifier command calls like `greet` (no parens, no receiver).
+    //
+    // A bare Ruby identifier is syntactically indistinguishable from a local-variable
+    // read, so on a miss we cannot safely decide whether the identifier is a call or
+    // a variable. To avoid flooding unresolved_calls with every variable reference,
+    // we only record in-file hits from this pass (same as before) and rely on Query A
+    // for cross-file call recording. The plan explicitly permits this conservative
+    // choice for the bare-identifier pass.
     let ident_query = Query::new(&tree_sitter_ruby::LANGUAGE.into(), r#"(identifier) @ident"#)
         .expect("valid ruby ident query");
 
@@ -289,6 +299,13 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             span: span(file, root),
             confidence: Confidence::Likely,
         });
+    }
+
+    // Record unresolved (cross-file) calls from Query A misses.
+    unresolved.sort_unstable();
+    unresolved.dedup();
+    for (from, name) in unresolved {
+        g.add_unresolved_call(from, name);
     }
 
     // Import pass: emit a Dependency symbol per require_relative and an Imports edge from the file.
@@ -490,5 +507,22 @@ mod tests {
             .symbols()
             .iter()
             .any(|s| s.kind == SymbolKind::Dependency && s.name == "lib/c.rb"));
+    }
+
+    #[test]
+    fn records_unresolved_cross_file_call() {
+        // `external` is not defined in this file -> recorded as unresolved.
+        // Use parens so tree-sitter parses it as an explicit `(call ...)` node
+        // (without parens, a bare word is an identifier that Query B only matches
+        // when it's already a known in-file name, which `external` is not).
+        let g = extract("a.rb", "def caller\n  external()\nend\n");
+        let caller_id = g.symbols().iter().find(|s| s.name == "caller").unwrap().id;
+        assert!(
+            g.unresolved_calls()
+                .iter()
+                .any(|(from, name)| *from == caller_id && name == "external"),
+            "expected unresolved call (caller, external); got {:?}",
+            g.unresolved_calls()
+        );
     }
 }

@@ -223,6 +223,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let mut call_cursor = QueryCursor::new();
     let mut call_matches = call_cursor.matches(&call_q, root, src.as_bytes());
     let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
+    let mut unresolved: Vec<(SymbolId, String)> = Vec::new();
     while let Some(m) = call_matches.next() {
         let mut callee_name = None;
         let mut call_node = None;
@@ -236,11 +237,12 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
             continue;
         };
-        let Some(&callee_id) = name_to_id.get(&callee_name) else {
-            continue;
-        };
         let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
-        edges.push((from, callee_id));
+        if let Some(&callee_id) = name_to_id.get(&callee_name) {
+            edges.push((from, callee_id));
+        } else {
+            unresolved.push((from, callee_name));
+        }
     }
 
     // Deduplicate and emit Calls edges.
@@ -254,6 +256,13 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             span: span(file, root),
             confidence: Confidence::Likely,
         });
+    }
+
+    // Record unresolved (cross-file) calls.
+    unresolved.sort_unstable();
+    unresolved.dedup();
+    for (from, name) in unresolved {
+        g.add_unresolved_call(from, name);
     }
 
     g
@@ -323,5 +332,19 @@ mod tests {
         let g = extract("c.go", src);
         let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
         assert_eq!(g.complexity_of(m), Some(4));
+    }
+
+    #[test]
+    fn records_unresolved_cross_file_call() {
+        // `external` is not defined in this file -> recorded as unresolved.
+        let g = extract("a.go", "package main\nfunc m() { external() }\n");
+        let m_id = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
+        assert!(
+            g.unresolved_calls()
+                .iter()
+                .any(|(from, name)| *from == m_id && name == "external"),
+            "expected unresolved call (m, external); got {:?}",
+            g.unresolved_calls()
+        );
     }
 }
