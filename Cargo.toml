@@ -7,6 +7,7 @@ members = [
   "crates/stratify-lang-ruby",
   "crates/stratify-lang-ts",
   "crates/stratify-lang-py",
+  "crates/stratify-lang-go",
   "crates/stratify-analysis",
   "crates/stratify-report",
   "crates/stratify-cli",
@@ -28,6 +29,7 @@ tree-sitter-java = "0.23"
 tree-sitter-ruby = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-python = "0.23"
+tree-sitter-go = "0.23"
 clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
 insta = { version = "1", features = ["json"] }
