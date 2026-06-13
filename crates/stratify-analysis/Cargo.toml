@@ -6,3 +6,5 @@ license.workspace = true
 
 [dependencies]
 stratify-core = { path = "../stratify-core" }
+serde = { workspace = true }
+globset = { workspace = true }

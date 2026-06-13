@@ -1,0 +1,7 @@
+[layers]
+models = ["sample-boundary/models/**"]
+controllers = ["sample-boundary/controllers/**"]
+
+[[forbid]]
+from = "models"
+to = "controllers"

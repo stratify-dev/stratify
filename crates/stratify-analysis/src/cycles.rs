@@ -1,52 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use stratify_core::ir::Span;
-use stratify_core::{Confidence, Finding, IrGraph, RefKind, Severity, SymbolKind};
+use stratify_core::{Confidence, Finding, IrGraph, Severity};
 
 /// Detect circular dependencies in the cross-file import graph. An `Imports`
 /// edge (File -> Dependency) resolves to a file-to-file edge when the
 /// Dependency's name (import key) equals some File/Class/Module symbol's fqn
 /// (export key). Cycles are found by DFS back-edge detection.
 pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
-    // export key -> file path. Built from importable symbols only.
-    let mut export: HashMap<&str, String> = HashMap::new();
-    for s in graph.symbols() {
-        if matches!(
-            s.kind,
-            SymbolKind::File | SymbolKind::Class | SymbolKind::Module
-        ) {
-            export
-                .entry(s.fqn.as_str())
-                .or_insert_with(|| s.span.file.clone());
-        }
-    }
-
-    // file -> sorted set of files it imports.
-    let mut adj: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut span_of: HashMap<String, Span> = HashMap::new();
-    for s in graph.symbols() {
-        if matches!(s.kind, SymbolKind::File) {
-            adj.entry(s.span.file.clone()).or_default();
-            span_of
-                .entry(s.span.file.clone())
-                .or_insert_with(|| s.span.clone());
-        }
-    }
-    for r in graph.references() {
-        if !matches!(r.kind, RefKind::Imports) {
-            continue;
-        }
-        let (Some(from), Some(to)) = (graph.symbol(r.from), graph.symbol(r.to)) else {
-            continue;
-        };
-        let src_file = &from.span.file;
-        if let Some(target_file) = export.get(to.name.as_str()) {
-            if target_file != src_file {
-                adj.entry(src_file.clone())
-                    .or_default()
-                    .insert(target_file.clone());
-            }
-        }
-    }
+    let adj = crate::imports::file_import_graph(graph);
+    let span_of = crate::imports::file_spans(graph);
 
     // DFS back-edge detection. Colors: 0 = white, 1 = gray (on stack), 2 = black.
     let mut color: HashMap<String, u8> = HashMap::new();
@@ -127,6 +89,7 @@ fn canonical_cycle(nodes: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
     use stratify_core::ir::{Reference, Symbol, SymbolId, Visibility};
+    use stratify_core::{RefKind, SymbolKind};
 
     fn file_sym(g: &mut IrGraph, path: &str) -> SymbolId {
         g.add_symbol(Symbol {

@@ -1,0 +1,7 @@
+[layers]
+models = ["models/**"]
+controllers = ["controllers/**"]
+
+[[forbid]]
+from = "models"
+to = "controllers"

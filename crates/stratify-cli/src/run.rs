@@ -71,7 +71,20 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
         HOTSPOT_THRESHOLD,
     ));
     findings.extend(stratify_analysis::cycles::analyze(&graph));
+    let boundary_config = load_boundary_config(root);
+    findings.extend(stratify_analysis::boundaries::analyze(
+        &graph,
+        &boundary_config,
+    ));
     Ok(Report::new(findings))
+}
+
+fn load_boundary_config(root: &Path) -> stratify_analysis::boundaries::BoundaryConfig {
+    let path = root.join("stratify.toml");
+    match std::fs::read_to_string(&path) {
+        Ok(text) => toml::from_str(&text).unwrap_or_default(),
+        Err(_) => stratify_analysis::boundaries::BoundaryConfig::default(),
+    }
 }
 
 /// Returns true if any finding in `report` has severity >= `threshold`.
