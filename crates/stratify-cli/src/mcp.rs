@@ -222,4 +222,16 @@ mod tests {
         let resp: Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(resp["result"]["tools"][0]["name"], "analyze");
     }
+
+    #[test]
+    fn tools_call_bad_path_is_tool_error() {
+        let req = json!({
+            "jsonrpc":"2.0","id":7,"method":"tools/call",
+            "params": { "name": "analyze", "arguments": { "path": "/tmp/stratify_does_not_exist_zzz" } }
+        });
+        let resp = handle_request(&req).unwrap();
+        assert_eq!(resp["result"]["isError"], true);
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("path not found"), "text: {text}");
+    }
 }

@@ -25,6 +25,13 @@ pub enum Format {
 /// Walk `root`, parse every file a registered adapter handles, merge into one
 /// IrGraph, run dead-code, and return the Report.
 pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
+    if !root.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("path not found: {}", root.display()),
+        ));
+    }
+
     let adapters: Vec<Box<dyn LanguageAdapter>> = vec![
         Box::new(JavaAdapter),
         Box::new(stratify_lang_ruby::RubyAdapter),
