@@ -526,5 +526,4 @@ mod tests {
             g.unresolved_calls()
         );
     }
-
 }

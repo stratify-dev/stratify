@@ -107,7 +107,8 @@ impl IrGraph {
             self.complexity.push((SymbolId(id.0 + offset), v));
         }
         for (from, name) in other.unresolved_calls {
-            self.unresolved_calls.push((SymbolId(from.0 + offset), name));
+            self.unresolved_calls
+                .push((SymbolId(from.0 + offset), name));
         }
     }
 }
@@ -233,7 +234,10 @@ mod tests {
         g2.add_unresolved_call(x, "target".into());
         g1.merge(g2);
         // x was id 0 in g2 -> id 1 after merge (offset 1); name unchanged.
-        assert_eq!(g1.unresolved_calls(), &[(SymbolId(1), "target".to_string())]);
+        assert_eq!(
+            g1.unresolved_calls(),
+            &[(SymbolId(1), "target".to_string())]
+        );
     }
 
     #[test]

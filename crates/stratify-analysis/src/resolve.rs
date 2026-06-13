@@ -54,7 +54,12 @@ pub fn cross_file_calls(graph: &mut IrGraph) {
                     from: *from,
                     to: *to,
                     kind: RefKind::Calls,
-                    span: Span { file: "<resolved>".into(), start_byte: 0, end_byte: 0, start_line: 0 },
+                    span: Span {
+                        file: "<resolved>".into(),
+                        start_byte: 0,
+                        end_byte: 0,
+                        start_line: 0,
+                    },
                     confidence: Confidence::Likely,
                 });
             }
@@ -76,7 +81,12 @@ mod tests {
             kind: SymbolKind::Function,
             name: name.into(),
             fqn: name.into(),
-            span: Span { file: file.into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: file.into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         })
@@ -89,8 +99,13 @@ mod tests {
         let target = func(&mut g, "target", "b.rb");
         g.add_unresolved_call(caller, "target".into());
         cross_file_calls(&mut g);
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Calls) && r.from == caller && r.to == target && r.confidence == Confidence::Likely));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Calls)
+                && r.from == caller
+                && r.to == target
+                && r.confidence == Confidence::Likely));
     }
 
     #[test]
@@ -99,7 +114,10 @@ mod tests {
         let caller = func(&mut g, "caller", "a.rb");
         g.add_unresolved_call(caller, "println".into()); // no repo function named this
         cross_file_calls(&mut g);
-        assert!(g.references().iter().all(|r| !matches!(r.kind, RefKind::Calls)));
+        assert!(g
+            .references()
+            .iter()
+            .all(|r| !matches!(r.kind, RefKind::Calls)));
     }
 
     #[test]
@@ -111,7 +129,10 @@ mod tests {
         let _same = func(&mut g, "target", "a.rb");
         g.add_unresolved_call(caller, "target".into());
         cross_file_calls(&mut g);
-        assert!(g.references().iter().all(|r| !matches!(r.kind, RefKind::Calls)));
+        assert!(g
+            .references()
+            .iter()
+            .all(|r| !matches!(r.kind, RefKind::Calls)));
     }
 
     #[test]
@@ -120,13 +141,24 @@ mod tests {
         let caller = func(&mut g, "caller", "a.rb");
         let target = func(&mut g, "target", "b.rb");
         g.add_reference(Reference {
-            from: caller, to: target, kind: RefKind::Calls,
-            span: Span { file: "a.rb".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            from: caller,
+            to: target,
+            kind: RefKind::Calls,
+            span: Span {
+                file: "a.rb".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             confidence: Confidence::Likely,
         });
         g.add_unresolved_call(caller, "target".into());
         cross_file_calls(&mut g);
-        let count = g.references().iter().filter(|r| matches!(r.kind, RefKind::Calls) && r.from == caller && r.to == target).count();
+        let count = g
+            .references()
+            .iter()
+            .filter(|r| matches!(r.kind, RefKind::Calls) && r.from == caller && r.to == target)
+            .count();
         assert_eq!(count, 1, "should not duplicate the existing edge");
     }
 }
