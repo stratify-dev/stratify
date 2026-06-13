@@ -8,6 +8,7 @@ pub struct IrGraph {
     entrypoints: Vec<SymbolId>,
     tokens: Vec<Token>,
     complexity: Vec<(SymbolId, u32)>,
+    unresolved_calls: Vec<(SymbolId, String)>,
 }
 
 impl IrGraph {
@@ -74,6 +75,17 @@ impl IrGraph {
         &self.complexity
     }
 
+    /// Record a call whose callee was not found in the caller's own file, for
+    /// later cross-file resolution. `from` is the caller (enclosing function or
+    /// the file), `name` is the callee identifier.
+    pub fn add_unresolved_call(&mut self, from: SymbolId, name: String) {
+        self.unresolved_calls.push((from, name));
+    }
+
+    pub fn unresolved_calls(&self) -> &[(SymbolId, String)] {
+        &self.unresolved_calls
+    }
+
     /// Merge another graph into this one, remapping the other graph's ids so
     /// they stay unique. Returns nothing; used to combine per-file graphs.
     pub fn merge(&mut self, other: IrGraph) {
@@ -93,6 +105,10 @@ impl IrGraph {
         self.tokens.extend(other.tokens);
         for (id, v) in other.complexity {
             self.complexity.push((SymbolId(id.0 + offset), v));
+        }
+        for (from, name) in other.unresolved_calls {
+            self.unresolved_calls
+                .push((SymbolId(from.0 + offset), name));
         }
     }
 }
@@ -199,6 +215,29 @@ mod tests {
         g1.merge(g2);
         // x was id 0 in g2, becomes id 1 after merge (offset 1).
         assert_eq!(g1.complexity_of(SymbolId(1)), Some(5));
+    }
+
+    #[test]
+    fn records_unresolved_calls() {
+        let mut g = IrGraph::new();
+        let a = g.add_symbol(sym("a"));
+        g.add_unresolved_call(a, "other".into());
+        assert_eq!(g.unresolved_calls(), &[(a, "other".to_string())]);
+    }
+
+    #[test]
+    fn merge_remaps_unresolved_call_from() {
+        let mut g1 = IrGraph::new();
+        g1.add_symbol(sym("a"));
+        let mut g2 = IrGraph::new();
+        let x = g2.add_symbol(sym("x"));
+        g2.add_unresolved_call(x, "target".into());
+        g1.merge(g2);
+        // x was id 0 in g2 -> id 1 after merge (offset 1); name unchanged.
+        assert_eq!(
+            g1.unresolved_calls(),
+            &[(SymbolId(1), "target".to_string())]
+        );
     }
 
     #[test]

@@ -236,19 +236,28 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let mut call_cursor = QueryCursor::new();
     let mut call_matches = call_cursor.matches(&call_query, root, src.as_bytes());
     let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
+    let mut unresolved: Vec<(SymbolId, String)> = Vec::new();
     while let Some(m) = call_matches.next() {
         for cap in m.captures {
             if cap.index == callee_idx {
                 let callee_name = text(cap.node, src);
+                let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                 if let Some(&callee_id) = name_to_id.get(callee_name) {
-                    let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                     edges.push((from, callee_id));
+                } else {
+                    unresolved.push((from, callee_name.to_string()));
                 }
             }
         }
     }
 
     // Query B: bare identifier command calls like `greet` (no parens, no receiver).
+    //
+    // A bare Ruby identifier is syntactically indistinguishable from a local-variable
+    // read. We record in-file hits as Calls edges and misses as unresolved calls.
+    // The cross_file_calls pass drops any unresolved name that has no matching repo
+    // function, so variable names and builtins are silently ignored.
+    // We skip identifiers that are definition sites or parameter nodes.
     let ident_query = Query::new(&tree_sitter_ruby::LANGUAGE.into(), r#"(identifier) @ident"#)
         .expect("valid ruby ident query");
 
@@ -260,19 +269,21 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         for cap in m.captures {
             if cap.index == ident_idx {
                 let callee_name = text(cap.node, src);
-                // Only keep identifiers that match a known in-file method.
+                // Skip definition sites and parameter nodes.
+                let parent_kind = cap.node.parent().map(|p| p.kind()).unwrap_or("");
+                if matches!(
+                    parent_kind,
+                    "method" | "method_parameters" | "block_parameter" | "keyword_parameter"
+                ) {
+                    continue;
+                }
+                let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                 if let Some(&callee_id) = name_to_id.get(callee_name) {
-                    // Skip if this identifier is the method name in a `def` declaration
-                    // or is a parameter definition node.
-                    let parent_kind = cap.node.parent().map(|p| p.kind()).unwrap_or("");
-                    if matches!(
-                        parent_kind,
-                        "method" | "method_parameters" | "block_parameter" | "keyword_parameter"
-                    ) {
-                        continue;
-                    }
-                    let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                     edges.push((from, callee_id));
+                } else {
+                    // Miss: could be a cross-file call. Record for later resolution.
+                    // The cross_file_calls pass drops names with no repo function match.
+                    unresolved.push((from, callee_name.to_string()));
                 }
             }
         }
@@ -289,6 +300,13 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             span: span(file, root),
             confidence: Confidence::Likely,
         });
+    }
+
+    // Record unresolved (cross-file) calls from Query A misses.
+    unresolved.sort_unstable();
+    unresolved.dedup();
+    for (from, name) in unresolved {
+        g.add_unresolved_call(from, name);
     }
 
     // Import pass: emit a Dependency symbol per require_relative and an Imports edge from the file.
@@ -490,5 +508,22 @@ mod tests {
             .symbols()
             .iter()
             .any(|s| s.kind == SymbolKind::Dependency && s.name == "lib/c.rb"));
+    }
+
+    #[test]
+    fn records_unresolved_cross_file_call() {
+        // `external` is not defined in this file -> recorded as unresolved.
+        // Use parens so tree-sitter parses it as an explicit `(call ...)` node
+        // (without parens, a bare word is an identifier that Query B only matches
+        // when it's already a known in-file name, which `external` is not).
+        let g = extract("a.rb", "def caller\n  external()\nend\n");
+        let caller_id = g.symbols().iter().find(|s| s.name == "caller").unwrap().id;
+        assert!(
+            g.unresolved_calls()
+                .iter()
+                .any(|(from, name)| *from == caller_id && name == "external"),
+            "expected unresolved call (caller, external); got {:?}",
+            g.unresolved_calls()
+        );
     }
 }

@@ -288,19 +288,21 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
             continue;
         };
-        let Some(&callee_id) = name_to_id.get(&callee_name) else {
-            continue;
-        };
-        let Some(caller_id) = enclosing_method_id(call_node, &g, file) else {
-            continue;
-        };
-        g.add_reference(Reference {
-            from: caller_id,
-            to: callee_id,
-            kind: RefKind::Calls,
-            span: span(file, call_node),
-            confidence: Confidence::Likely,
-        });
+        if let Some(&callee_id) = name_to_id.get(&callee_name) {
+            let Some(caller_id) = enclosing_method_id(call_node, &g, file) else {
+                continue;
+            };
+            g.add_reference(Reference {
+                from: caller_id,
+                to: callee_id,
+                kind: RefKind::Calls,
+                span: span(file, call_node),
+                confidence: Confidence::Likely,
+            });
+        } else {
+            let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
+            g.add_unresolved_call(from, callee_name.clone());
+        }
     }
 
     g
@@ -399,6 +401,21 @@ mod tests {
         let g = extract("Foo.java", src);
         let foo = g.symbols().iter().find(|s| s.name == "Foo").unwrap();
         assert_eq!(foo.fqn, "com.acme.Foo");
+    }
+
+    #[test]
+    fn records_unresolved_cross_file_call() {
+        // `external` is not defined in this file -> recorded as unresolved.
+        let src = "class A { void m() { external(); } }";
+        let g = extract("A.java", src);
+        let m_id = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
+        assert!(
+            g.unresolved_calls()
+                .iter()
+                .any(|(from, name)| *from == m_id && name == "external"),
+            "expected unresolved call (m, external); got {:?}",
+            g.unresolved_calls()
+        );
     }
 
     #[test]
