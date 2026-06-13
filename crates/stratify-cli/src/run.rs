@@ -1,9 +1,13 @@
 use ignore::WalkBuilder;
 use std::path::Path;
 use stratify_analysis::deadcode;
+use stratify_analysis::duplication;
 use stratify_core::{IrGraph, Report, Severity};
 use stratify_lang::LanguageAdapter;
 use stratify_lang_java::JavaAdapter;
+
+/// Minimum identical normalized-token run length to count as a clone.
+const DUP_MIN_TOKENS: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -48,7 +52,8 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
         }
     }
 
-    let findings = deadcode::analyze(&graph);
+    let mut findings = deadcode::analyze(&graph);
+    findings.extend(duplication::analyze(&graph, DUP_MIN_TOKENS));
     Ok(Report::new(findings))
 }
 
