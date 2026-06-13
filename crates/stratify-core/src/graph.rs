@@ -7,6 +7,7 @@ pub struct IrGraph {
     references: Vec<Reference>,
     entrypoints: Vec<SymbolId>,
     tokens: Vec<Token>,
+    complexity: Vec<(SymbolId, u32)>,
 }
 
 impl IrGraph {
@@ -57,6 +58,22 @@ impl IrGraph {
         &self.tokens
     }
 
+    /// Record a function's cyclomatic complexity. Set by adapters.
+    pub fn set_complexity(&mut self, id: SymbolId, value: u32) {
+        self.complexity.push((id, value));
+    }
+
+    pub fn complexity_of(&self, id: SymbolId) -> Option<u32> {
+        self.complexity
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, v)| *v)
+    }
+
+    pub fn complexities(&self) -> &[(SymbolId, u32)] {
+        &self.complexity
+    }
+
     /// Merge another graph into this one, remapping the other graph's ids so
     /// they stay unique. Returns nothing; used to combine per-file graphs.
     pub fn merge(&mut self, other: IrGraph) {
@@ -74,6 +91,9 @@ impl IrGraph {
             self.entrypoints.push(SymbolId(e.0 + offset));
         }
         self.tokens.extend(other.tokens);
+        for (id, v) in other.complexity {
+            self.complexity.push((SymbolId(id.0 + offset), v));
+        }
     }
 }
 
@@ -158,6 +178,27 @@ mod tests {
         g1.merge(g2);
         // x was id 0 in g2, becomes id 1 after merge (offset 1).
         assert_eq!(g1.entrypoints(), &[SymbolId(1)]);
+    }
+
+    #[test]
+    fn set_and_read_complexity() {
+        let mut g = IrGraph::new();
+        let a = g.add_symbol(sym("a"));
+        g.set_complexity(a, 7);
+        assert_eq!(g.complexity_of(a), Some(7));
+        assert_eq!(g.complexity_of(SymbolId(999)), None);
+    }
+
+    #[test]
+    fn merge_remaps_complexity() {
+        let mut g1 = IrGraph::new();
+        g1.add_symbol(sym("a"));
+        let mut g2 = IrGraph::new();
+        let x = g2.add_symbol(sym("x"));
+        g2.set_complexity(x, 5);
+        g1.merge(g2);
+        // x was id 0 in g2, becomes id 1 after merge (offset 1).
+        assert_eq!(g1.complexity_of(SymbolId(1)), Some(5));
     }
 
     #[test]
