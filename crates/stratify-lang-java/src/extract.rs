@@ -72,6 +72,31 @@ fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
     }
 }
 
+/// Count decision points in a subtree for cyclomatic complexity.
+fn count_decisions_java(node: Node) -> u32 {
+    let mut count = 0u32;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "if_statement" | "while_statement" | "for_statement"
+            | "enhanced_for_statement" | "do_statement" | "catch_clause"
+            | "switch_label" | "ternary_expression" | "&&" | "||" => {
+                count += 1;
+            }
+            _ => {}
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    count
+}
+
+fn cyclomatic_java(node: Node) -> u32 {
+    1 + count_decisions_java(node)
+}
+
 /// Extract classes and their methods into a per-file graph. The file itself
 /// becomes a `File` symbol; classes and methods get `Defines` edges from it.
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
@@ -148,6 +173,10 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             });
             if is_main {
                 g.mark_entrypoint(id);
+            }
+            if kind == SymbolKind::Function {
+                let cx = cyclomatic_java(decl_node);
+                g.set_complexity(id, cx);
             }
         }
     }
@@ -271,6 +300,15 @@ mod tests {
         let g = extract("App.java", src);
         let main_id = g.symbols().iter().find(|s| s.name == "main").unwrap().id;
         assert_eq!(g.entrypoints(), &[main_id]);
+    }
+
+    #[test]
+    fn computes_method_complexity() {
+        // base 1 + two ifs + one && = 4
+        let src = "class A { void m(int x) { if (x > 0 && x < 9) {} if (x == 5) {} } }";
+        let g = extract("A.java", src);
+        let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
+        assert_eq!(g.complexity_of(m), Some(4));
     }
 
     #[test]
