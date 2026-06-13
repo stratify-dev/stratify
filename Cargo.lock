@@ -544,6 +544,7 @@ dependencies = [
  "stratify-analysis",
  "stratify-core",
  "stratify-lang",
+ "stratify-lang-go",
  "stratify-lang-java",
  "stratify-lang-py",
  "stratify-lang-ruby",

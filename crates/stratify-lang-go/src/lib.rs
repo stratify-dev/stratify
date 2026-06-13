@@ -27,7 +27,9 @@ mod tests {
     fn adapter_parses_a_function() {
         let a = GoAdapter;
         assert!(a.handles_extension("go"));
-        let g = a.parse_file("a.go", "package main\nfunc hi() {}\n").unwrap();
+        let g = a
+            .parse_file("a.go", "package main\nfunc hi() {}\n")
+            .unwrap();
         assert!(g.symbols().iter().any(|s| s.name == "hi"));
     }
 }

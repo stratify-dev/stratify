@@ -11,8 +11,14 @@ fn sample_go_reports_dead_code() {
         .output()
         .expect("run stratify binary");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"rule\": \"dead_code\""), "stdout: {stdout}");
+    assert!(
+        stdout.contains("\"rule\": \"dead_code\""),
+        "stdout: {stdout}"
+    );
     assert!(stdout.contains("neverCalled"), "stdout: {stdout}");
     // Exported is an entrypoint, so it must NOT appear in any finding.
-    assert!(!stdout.contains("Exported"), "Exported should not be flagged: {stdout}");
+    assert!(
+        !stdout.contains("Exported"),
+        "Exported should not be flagged: {stdout}"
+    );
 }

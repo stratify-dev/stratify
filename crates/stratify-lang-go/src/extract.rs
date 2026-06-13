@@ -6,7 +6,10 @@ use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
 fn is_exported_go(name: &str) -> bool {
-    name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+    name.chars()
+        .next()
+        .map(|c| c.is_uppercase())
+        .unwrap_or(false)
 }
 
 fn count_decisions_go(node: Node) -> u32 {
@@ -287,14 +290,18 @@ mod tests {
 
     #[test]
     fn main_init_and_exported_are_entrypoints() {
-        let src = "package main\nfunc main() {}\nfunc init() {}\nfunc Exported() {}\nfunc helper() {}\n";
+        let src =
+            "package main\nfunc main() {}\nfunc init() {}\nfunc Exported() {}\nfunc helper() {}\n";
         let g = extract("m.go", src);
         let id = |name: &str| g.symbols().iter().find(|s| s.name == name).unwrap().id;
         let eps = g.entrypoints();
         assert!(eps.contains(&id("main")));
         assert!(eps.contains(&id("init")));
         assert!(eps.contains(&id("Exported")));
-        assert!(!eps.contains(&id("helper")), "unexported helper is not an entrypoint");
+        assert!(
+            !eps.contains(&id("helper")),
+            "unexported helper is not an entrypoint"
+        );
     }
 
     #[test]
@@ -303,8 +310,10 @@ mod tests {
         let g = extract("x.go", src);
         let a = g.symbols().iter().find(|s| s.name == "a").unwrap().id;
         let b = g.symbols().iter().find(|s| s.name == "b").unwrap().id;
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
     }
 
     #[test]
