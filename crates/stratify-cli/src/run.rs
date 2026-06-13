@@ -12,6 +12,9 @@ const DUP_MIN_TOKENS: usize = 40;
 /// Cyclomatic complexity above this is reported.
 const COMPLEXITY_THRESHOLD: u32 = 10;
 
+/// complexity x churn above this is reported as a hotspot.
+const HOTSPOT_THRESHOLD: u32 = 50;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Human,
@@ -60,6 +63,12 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
     findings.extend(stratify_analysis::complexity::analyze(
         &graph,
         COMPLEXITY_THRESHOLD,
+    ));
+    let churn = crate::churn::git_churn(root);
+    findings.extend(stratify_analysis::hotspot::analyze(
+        &graph,
+        &churn,
+        HOTSPOT_THRESHOLD,
     ));
     Ok(Report::new(findings))
 }
