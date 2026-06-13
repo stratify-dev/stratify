@@ -29,6 +29,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t = FailOn::Never)]
         fail_on: FailOn,
     },
+    /// Run an MCP server over stdio for coding agents.
+    Mcp,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -98,5 +100,12 @@ fn main() -> ExitCode {
 
             ExitCode::SUCCESS
         }
+        Command::Mcp => match mcp::run_stdio() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("stratify: {e}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
