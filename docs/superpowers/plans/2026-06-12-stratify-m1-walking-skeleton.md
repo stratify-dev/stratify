@@ -1627,3 +1627,24 @@ Deferred to later milestones (correctly out of M1 scope): Ruby adapter (M2), dup
 Known M1 simplification: intra-file calls carry `Likely` confidence, so a method reachable only inside its own file is reported as "possibly unused" (info), not silently cleared. This is intentional and tested. Cross-file resolution in a later milestone promotes these to `Certain`.
 
 Type consistency check: `Confidence`, `Symbol`, `Reference`, `IrGraph`, `Finding`, `Report`, `Severity`, `LanguageAdapter`, `JavaAdapter`, `deadcode::analyze`, `Format`, `run::run` are referenced with consistent names and signatures across tasks.
+
+---
+
+## Addendum: corrections and added scope (during execution)
+
+### Task 8 correction (commit 2d5b447)
+
+The original Task 8 made two choices that combined into a bug: File symbols were entrypoints AND `Defines` edges were traversed during reachability. Since the Java adapter emits `File --Defines(Certain)--> method` for every method, every method became reachable from its file, so dead-code analysis produced zero findings on real input.
+
+Fix applied:
+- `Defines` removed from the reachability traversal. `Defines` is structural containment, not a use-edge; reachability follows `Calls` and `Inherits` only.
+- `is_entrypoint` no longer treats File symbols as roots. Entrypoints are functions named `main`. Framework and file-based roots return in a later milestone.
+- Added regression test `file_defines_does_not_make_methods_reachable` in `deadcode.rs` covering the File+Defines path that the original unit tests missed.
+
+### Task 13: exit-code quality gate (added)
+
+`stratify check` gains `--fail-on <never|info|warning|error>` (default `never`, preserving exit 0). With a threshold set, the binary exits non-zero when any finding has severity at or above the threshold. `Severity` gains an `Ord` derive (Info < Warning < Error). This is the hook a CI quality gate needs.
+
+### Task 14: reusable GitHub Action (added)
+
+A composite `action.yml` at the repo root lets other projects run Stratify as a quality gate (inputs: `path`, `fail-on`, `format`). A project CI workflow builds, tests, and dogfoods the tool on its own sample fixtures. Consumer usage is documented in the README.

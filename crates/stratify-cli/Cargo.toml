@@ -1,0 +1,21 @@
+[package]
+name = "stratify-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stratify"
+path = "src/main.rs"
+
+[dependencies]
+stratify-core = { path = "../stratify-core" }
+stratify-lang = { path = "../stratify-lang" }
+stratify-lang-java = { path = "../stratify-lang-java" }
+stratify-analysis = { path = "../stratify-analysis" }
+stratify-report = { path = "../stratify-report" }
+clap = { workspace = true }
+ignore = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

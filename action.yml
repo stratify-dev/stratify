@@ -1,0 +1,40 @@
+name: Stratify Quality Gate
+description: >
+  Run Stratify dead-code and codebase-intelligence checks on a repository.
+  Fails the job when findings reach the configured severity threshold.
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  path:
+    description: Path to the directory to analyse.
+    default: '.'
+  fail-on:
+    description: "Minimum finding severity that causes the step to fail. One of: never, info, warning, error."
+    default: warning
+  format:
+    description: "Output format. One of: human, json."
+    default: human
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install stratify
+      shell: bash
+      run: |
+        cargo install \
+          --git https://github.com/stratify-dev/stratify \
+          stratify-cli \
+          --locked
+
+    - name: Run quality gate
+      shell: bash
+      run: |
+        stratify check "${{ inputs.path }}" \
+          --fail-on "${{ inputs.fail-on }}" \
+          --format "${{ inputs.format }}"

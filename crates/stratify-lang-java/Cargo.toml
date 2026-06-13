@@ -1,0 +1,12 @@
+[package]
+name = "stratify-lang-java"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+stratify-core = { path = "../stratify-core" }
+stratify-lang = { path = "../stratify-lang" }
+tree-sitter = { workspace = true }
+tree-sitter-java = { workspace = true }
+streaming-iterator = { workspace = true }
