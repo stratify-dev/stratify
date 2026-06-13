@@ -12,6 +12,7 @@ path = "src/main.rs"
 stratify-core = { path = "../stratify-core" }
 stratify-lang = { path = "../stratify-lang" }
 stratify-lang-java = { path = "../stratify-lang-java" }
+stratify-lang-ruby = { path = "../stratify-lang-ruby" }
 stratify-analysis = { path = "../stratify-analysis" }
 stratify-report = { path = "../stratify-report" }
 clap = { workspace = true }
