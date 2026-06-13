@@ -40,7 +40,9 @@ fn build(report: &Report) -> Sarif {
         .map(|id| RuleMeta {
             id: id.clone(),
             name: id.clone(),
-            short_description: Text { text: rule_description(id).to_string() },
+            short_description: Text {
+                text: rule_description(id).to_string(),
+            },
         })
         .collect();
 
@@ -50,11 +52,17 @@ fn build(report: &Report) -> Sarif {
         .map(|f| SarifResult {
             rule_id: f.rule.clone(),
             level: level_of(f.severity),
-            message: Text { text: f.message.clone() },
+            message: Text {
+                text: f.message.clone(),
+            },
             locations: vec![Location {
                 physical_location: PhysicalLocation {
-                    artifact_location: ArtifactLocation { uri: f.span.file.clone() },
-                    region: Region { start_line: f.span.start_line.max(1) },
+                    artifact_location: ArtifactLocation {
+                        uri: f.span.file.clone(),
+                    },
+                    region: Region {
+                        start_line: f.span.start_line.max(1),
+                    },
                 },
             }],
         })
@@ -162,7 +170,12 @@ mod tests {
             rule: rule.into(),
             severity: sev,
             message: format!("{rule} message"),
-            span: Span { file: file.into(), start_byte: 0, end_byte: 1, start_line: line },
+            span: Span {
+                file: file.into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: line,
+            },
             confidence: Confidence::Certain,
         }
     }
@@ -177,14 +190,26 @@ mod tests {
         assert_eq!(v["version"], "2.1.0");
         assert_eq!(v["runs"][0]["tool"]["driver"]["name"], "Stratify");
         // two distinct rules
-        assert_eq!(v["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            v["runs"][0]["tool"]["driver"]["rules"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         // two results
         let results = v["runs"][0]["results"].as_array().unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["ruleId"], "dead_code");
         assert_eq!(results[0]["level"], "warning");
-        assert_eq!(results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "A.java");
-        assert_eq!(results[0]["locations"][0]["physicalLocation"]["region"]["startLine"], 5);
+        assert_eq!(
+            results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "A.java"
+        );
+        assert_eq!(
+            results[0]["locations"][0]["physicalLocation"]["region"]["startLine"],
+            5
+        );
         // Info maps to SARIF "note"
         assert_eq!(results[1]["level"], "note");
     }
@@ -194,7 +219,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&render(&Report::new(vec![]))).unwrap();
         assert_eq!(v["version"], "2.1.0");
         assert!(v["runs"][0]["results"].as_array().unwrap().is_empty());
-        assert!(v["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().is_empty());
+        assert!(v["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -204,7 +232,13 @@ mod tests {
             finding("dead_code", Severity::Warning, "b", 2),
         ]);
         let v: serde_json::Value = serde_json::from_str(&render(&report)).unwrap();
-        assert_eq!(v["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            v["runs"][0]["tool"]["driver"]["rules"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(v["runs"][0]["results"].as_array().unwrap().len(), 2);
     }
 }

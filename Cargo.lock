@@ -540,6 +540,7 @@ dependencies = [
  "clap",
  "ignore",
  "insta",
+ "serde_json",
  "stratify-analysis",
  "stratify-core",
  "stratify-lang",
@@ -590,6 +591,7 @@ dependencies = [
 name = "stratify-report"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "stratify-core",
 ]
