@@ -139,28 +139,41 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 
 /// Read one `Content-Length`-framed JSON-RPC message. Returns `Ok(None)` on EOF.
 pub fn read_message<R: BufRead>(r: &mut R) -> std::io::Result<Option<Value>> {
-    let mut content_length: Option<usize> = None;
     loop {
-        let mut line = String::new();
-        let n = r.read_line(&mut line)?;
-        if n == 0 {
-            return Ok(None); // EOF
+        let mut content_length: Option<usize> = None;
+        let mut saw_header = false;
+        loop {
+            let mut line = String::new();
+            let n = r.read_line(&mut line)?;
+            if n == 0 {
+                return Ok(None); // true EOF
+            }
+            let line = line.trim_end_matches(['\r', '\n']);
+            if line.is_empty() {
+                break; // end of headers
+            }
+            saw_header = true;
+            if let Some(rest) = line.strip_prefix("Content-Length:") {
+                content_length = rest.trim().parse().ok();
+            }
         }
-        let line = line.trim_end_matches(['\r', '\n']);
-        if line.is_empty() {
-            break; // end of headers
-        }
-        if let Some(rest) = line.strip_prefix("Content-Length:") {
-            content_length = rest.trim().parse().ok();
+        let Some(len) = content_length else {
+            if saw_header {
+                // headers present but no Content-Length: stream is desynced, can't recover
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "LSP message missing Content-Length header",
+                ));
+            }
+            continue; // stray blank line(s) with no headers — skip, keep reading
+        };
+        let mut buf = vec![0u8; len];
+        r.read_exact(&mut buf)?;
+        match serde_json::from_slice(&buf) {
+            Ok(v) => return Ok(Some(v)),
+            Err(_) => continue, // body consumed (stream still in sync) — skip malformed JSON, read next
         }
     }
-    let len = match content_length {
-        Some(l) => l,
-        None => return Ok(None),
-    };
-    let mut buf = vec![0u8; len];
-    r.read_exact(&mut buf)?;
-    Ok(serde_json::from_slice(&buf).ok())
 }
 
 /// Write one `Content-Length`-framed JSON-RPC message.
@@ -290,5 +303,25 @@ mod tests {
     fn read_message_eof_returns_none() {
         let mut cur = Cursor::new(Vec::<u8>::new());
         assert!(read_message(&mut cur).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_message_skips_malformed_json_and_reads_next() {
+        use std::io::Cursor;
+        // a frame with invalid JSON body, then a valid frame
+        let bad = "Content-Length: 3\r\n\r\nnot"; // "not" is invalid JSON
+        let good_body = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"shutdown\"}";
+        let good = format!("Content-Length: {}\r\n\r\n{}", good_body.len(), good_body);
+        let mut cur = Cursor::new(format!("{bad}{good}").into_bytes());
+        let msg = read_message(&mut cur).unwrap().unwrap();
+        assert_eq!(msg["id"], 7);
+    }
+
+    #[test]
+    fn read_message_errors_on_missing_content_length() {
+        use std::io::Cursor;
+        let input = "Content-Type: application/json\r\n\r\n";
+        let mut cur = Cursor::new(input.as_bytes().to_vec());
+        assert!(read_message(&mut cur).is_err());
     }
 }
