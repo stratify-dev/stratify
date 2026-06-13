@@ -132,3 +132,28 @@ boundary violations), each tagged with its rule as the diagnostic code.
 
 Point your editor's LSP client at the `stratify lsp` command for files in the
 workspace. The server reads the workspace root from the `initialize` request.
+
+## Layer boundaries
+
+Enforce architecture layers in `stratify.toml`:
+
+```toml
+preset = "rails"   # or "layered" for controller/service/repository/domain
+```
+
+A preset ships layer globs and forbidden imports. The `rails` preset forbids models from importing controllers, views, or mailers. The `layered` preset enforces the controller/service/repository/domain stack common in Spring, NestJS, and similar frameworks.
+
+Add your own `[layers]` and `[[forbid]]` entries to extend or override a preset. User-defined layer keys replace preset keys of the same name. User `[[forbid]]` rules are appended to the preset rules.
+
+```toml
+preset = "rails"
+
+[layers]
+models = ["lib/models/**"]   # replaces the preset's app/models/** glob
+
+[[forbid]]
+from = "models"
+to = "jobs"
+```
+
+With no `stratify.toml`, Stratify auto-detects a Rails app (`app/controllers/` directory) or a Maven/Gradle project (`pom.xml` or `build.gradle`) and applies the matching preset. A project that matches no marker gets no boundary checks.

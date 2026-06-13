@@ -19,11 +19,17 @@ pub struct BoundaryConfig {
 }
 
 fn layer(name: &str, globs: &[&str]) -> (String, Vec<String>) {
-    (name.to_string(), globs.iter().map(|s| s.to_string()).collect())
+    (
+        name.to_string(),
+        globs.iter().map(|s| s.to_string()).collect(),
+    )
 }
 
 fn forbid_rule(from: &str, to: &str) -> ForbidRule {
-    ForbidRule { from: from.to_string(), to: to.to_string() }
+    ForbidRule {
+        from: from.to_string(),
+        to: to.to_string(),
+    }
 }
 
 /// Return the layers + forbid rules for a built-in preset, or None if unknown.
@@ -52,8 +58,19 @@ pub fn builtin_preset(name: &str) -> Option<BoundaryConfig> {
             layers: [
                 layer("controller", &["**/controller/**", "**/controllers/**"]),
                 layer("service", &["**/service/**", "**/services/**"]),
-                layer("repository", &["**/repository/**", "**/repositories/**", "**/dao/**"]),
-                layer("domain", &["**/domain/**", "**/model/**", "**/models/**", "**/entity/**"]),
+                layer(
+                    "repository",
+                    &["**/repository/**", "**/repositories/**", "**/dao/**"],
+                ),
+                layer(
+                    "domain",
+                    &[
+                        "**/domain/**",
+                        "**/model/**",
+                        "**/models/**",
+                        "**/entity/**",
+                    ],
+                ),
             ]
             .into_iter()
             .collect(),
@@ -84,7 +101,11 @@ pub fn resolve(config: BoundaryConfig) -> BoundaryConfig {
     }
     let mut forbid = base.forbid;
     forbid.extend(config.forbid); // user rules appended
-    BoundaryConfig { preset: config.preset, layers, forbid }
+    BoundaryConfig {
+        preset: config.preset,
+        layers,
+        forbid,
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -281,19 +302,28 @@ mod tests {
         let c = builtin_preset("rails").unwrap();
         assert!(c.layers.contains_key("models"));
         assert!(c.layers.contains_key("controllers"));
-        assert!(c.forbid.iter().any(|r| r.from == "models" && r.to == "controllers"));
+        assert!(c
+            .forbid
+            .iter()
+            .any(|r| r.from == "models" && r.to == "controllers"));
     }
 
     #[test]
     fn resolve_expands_named_preset() {
-        let c = resolve(BoundaryConfig { preset: Some("rails".into()), ..Default::default() });
+        let c = resolve(BoundaryConfig {
+            preset: Some("rails".into()),
+            ..Default::default()
+        });
         assert!(c.layers.contains_key("models"));
         assert!(!c.forbid.is_empty());
     }
 
     #[test]
     fn resolve_unknown_preset_is_noop() {
-        let c = resolve(BoundaryConfig { preset: Some("nope".into()), ..Default::default() });
+        let c = resolve(BoundaryConfig {
+            preset: Some("nope".into()),
+            ..Default::default()
+        });
         assert!(c.layers.is_empty());
         assert!(c.forbid.is_empty());
     }
@@ -306,13 +336,25 @@ mod tests {
         let c = resolve(BoundaryConfig {
             preset: Some("rails".into()),
             layers,
-            forbid: vec![ForbidRule { from: "custom".into(), to: "controllers".into() }],
+            forbid: vec![ForbidRule {
+                from: "custom".into(),
+                to: "controllers".into(),
+            }],
         });
-        assert_eq!(c.layers.get("models").unwrap(), &vec!["lib/models/**".to_string()]); // overridden
+        assert_eq!(
+            c.layers.get("models").unwrap(),
+            &vec!["lib/models/**".to_string()]
+        ); // overridden
         assert!(c.layers.contains_key("custom")); // added
         assert!(c.layers.contains_key("controllers")); // from preset
-        assert!(c.forbid.iter().any(|r| r.from == "custom" && r.to == "controllers")); // user rule appended
-        assert!(c.forbid.iter().any(|r| r.from == "models" && r.to == "controllers")); // preset rule kept
+        assert!(c
+            .forbid
+            .iter()
+            .any(|r| r.from == "custom" && r.to == "controllers")); // user rule appended
+        assert!(c
+            .forbid
+            .iter()
+            .any(|r| r.from == "models" && r.to == "controllers")); // preset rule kept
     }
 
     #[test]
@@ -322,28 +364,66 @@ mod tests {
         use stratify_core::{Confidence, RefKind, SymbolKind};
         let mut g = IrGraph::new();
         let m = g.add_symbol(Symbol {
-            id: SymbolId(0), kind: SymbolKind::File, name: "app/models/user.rb".into(),
+            id: SymbolId(0),
+            kind: SymbolKind::File,
+            name: "app/models/user.rb".into(),
             fqn: "app/models/user.rb".into(),
-            span: Span { file: "app/models/user.rb".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            visibility: Visibility::Unknown, confidence: Confidence::Certain,
+            span: Span {
+                file: "app/models/user.rb".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
         });
         g.add_symbol(Symbol {
-            id: SymbolId(0), kind: SymbolKind::File, name: "app/controllers/x.rb".into(),
+            id: SymbolId(0),
+            kind: SymbolKind::File,
+            name: "app/controllers/x.rb".into(),
             fqn: "app/controllers/x.rb".into(),
-            span: Span { file: "app/controllers/x.rb".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            visibility: Visibility::Unknown, confidence: Confidence::Certain,
+            span: Span {
+                file: "app/controllers/x.rb".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
         });
         let dep = g.add_symbol(Symbol {
-            id: SymbolId(0), kind: SymbolKind::Dependency, name: "app/controllers/x.rb".into(),
+            id: SymbolId(0),
+            kind: SymbolKind::Dependency,
+            name: "app/controllers/x.rb".into(),
             fqn: "app/controllers/x.rb".into(),
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            visibility: Visibility::Unknown, confidence: Confidence::Certain,
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
         });
-        g.add_reference(Reference { from: m, to: dep, kind: RefKind::Imports,
-            span: Span { file: "app/models/user.rb".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            confidence: Confidence::Certain });
-        let config = resolve(BoundaryConfig { preset: Some("rails".into()), ..Default::default() });
+        g.add_reference(Reference {
+            from: m,
+            to: dep,
+            kind: RefKind::Imports,
+            span: Span {
+                file: "app/models/user.rb".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            confidence: Confidence::Certain,
+        });
+        let config = resolve(BoundaryConfig {
+            preset: Some("rails".into()),
+            ..Default::default()
+        });
         let findings = analyze(&g, &config);
-        assert!(findings.iter().any(|f| f.rule == "boundary" && f.message.contains("models") && f.message.contains("controllers")));
+        assert!(findings.iter().any(|f| f.rule == "boundary"
+            && f.message.contains("models")
+            && f.message.contains("controllers")));
     }
 }
