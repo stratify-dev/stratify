@@ -10,8 +10,13 @@ pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
     // export key -> file path. Built from importable symbols only.
     let mut export: HashMap<&str, String> = HashMap::new();
     for s in graph.symbols() {
-        if matches!(s.kind, SymbolKind::File | SymbolKind::Class | SymbolKind::Module) {
-            export.entry(s.fqn.as_str()).or_insert_with(|| s.span.file.clone());
+        if matches!(
+            s.kind,
+            SymbolKind::File | SymbolKind::Class | SymbolKind::Module
+        ) {
+            export
+                .entry(s.fqn.as_str())
+                .or_insert_with(|| s.span.file.clone());
         }
     }
 
@@ -21,7 +26,9 @@ pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
     for s in graph.symbols() {
         if matches!(s.kind, SymbolKind::File) {
             adj.entry(s.span.file.clone()).or_default();
-            span_of.entry(s.span.file.clone()).or_insert_with(|| s.span.clone());
+            span_of
+                .entry(s.span.file.clone())
+                .or_insert_with(|| s.span.clone());
         }
     }
     for r in graph.references() {
@@ -57,10 +64,12 @@ pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
     let mut findings = Vec::new();
     for cycle in reported {
         let file = &cycle[0];
-        let span = span_of
-            .get(file)
-            .cloned()
-            .unwrap_or(Span { file: file.clone(), start_byte: 0, end_byte: 0, start_line: 1 });
+        let span = span_of.get(file).cloned().unwrap_or(Span {
+            file: file.clone(),
+            start_byte: 0,
+            end_byte: 0,
+            start_line: 1,
+        });
         findings.push(Finding {
             rule: "cycle".into(),
             severity: Severity::Warning,
@@ -125,7 +134,12 @@ mod tests {
             kind: SymbolKind::File,
             name: path.into(),
             fqn: path.into(),
-            span: Span { file: path.into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: path.into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         })
@@ -137,7 +151,12 @@ mod tests {
             kind: SymbolKind::Dependency,
             name: key.into(),
             fqn: key.into(),
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });
@@ -145,7 +164,12 @@ mod tests {
             from,
             to: d,
             kind: RefKind::Imports,
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             confidence: Confidence::Certain,
         });
     }

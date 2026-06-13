@@ -104,7 +104,9 @@ fn cyclomatic_ruby(node: Node) -> u32 {
 
 fn resolve_require_relative(importer_file: &str, arg: &str) -> String {
     use std::path::{Component, Path};
-    let dir = Path::new(importer_file).parent().unwrap_or_else(|| Path::new(""));
+    let dir = Path::new(importer_file)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
     let joined = dir.join(arg);
     let mut parts: Vec<String> = Vec::new();
     for comp in joined.components() {
@@ -449,7 +451,11 @@ mod tests {
     #[test]
     fn file_fqn_is_path() {
         let g = extract("lib/a.rb", "def x\nend\n");
-        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        let f = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap();
         assert_eq!(f.fqn, "lib/a.rb");
     }
 
@@ -457,17 +463,32 @@ mod tests {
     fn emits_require_relative_edge_with_resolved_key() {
         // from lib/a.rb, require_relative "b" -> key lib/b.rb
         let g = extract("lib/a.rb", "require_relative \"b\"\n");
-        let dep = g.symbols().iter().find(|s| s.kind == SymbolKind::Dependency && s.name == "lib/b.rb");
+        let dep = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::Dependency && s.name == "lib/b.rb");
         assert!(dep.is_some(), "expected Dependency keyed lib/b.rb");
-        let file_id = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Imports) && r.from == file_id && r.to == dep.unwrap().id));
+        let file_id = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Imports)
+                && r.from == file_id
+                && r.to == dep.unwrap().id));
     }
 
     #[test]
     fn require_relative_handles_parent_dir() {
         // from lib/sub/a.rb, require_relative "../c" -> key lib/c.rb
         let g = extract("lib/sub/a.rb", "require_relative \"../c\"\n");
-        assert!(g.symbols().iter().any(|s| s.kind == SymbolKind::Dependency && s.name == "lib/c.rb"));
+        assert!(g
+            .symbols()
+            .iter()
+            .any(|s| s.kind == SymbolKind::Dependency && s.name == "lib/c.rb"));
     }
 }

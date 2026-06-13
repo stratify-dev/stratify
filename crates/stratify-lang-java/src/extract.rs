@@ -406,11 +406,24 @@ mod tests {
         let src = "package com.acme;\nimport com.other.Bar;\nclass Foo {}";
         let g = extract("Foo.java", src);
         // a Dependency named after the imported FQN
-        let dep = g.symbols().iter().find(|s| s.kind == SymbolKind::Dependency && s.name == "com.other.Bar");
-        assert!(dep.is_some(), "expected import Dependency for com.other.Bar");
+        let dep = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::Dependency && s.name == "com.other.Bar");
+        assert!(
+            dep.is_some(),
+            "expected import Dependency for com.other.Bar"
+        );
         let dep_id = dep.unwrap().id;
-        let file_id = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Imports) && r.from == file_id && r.to == dep_id));
+        let file_id = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Imports) && r.from == file_id && r.to == dep_id));
     }
 }

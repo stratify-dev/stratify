@@ -12,5 +12,8 @@ fn sample_cycle_reports_circular_dependency() {
         .expect("run stratify binary");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("\"rule\": \"cycle\""), "stdout: {stdout}");
-    assert!(stdout.contains("one.rb") && stdout.contains("two.rb"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("one.rb") && stdout.contains("two.rb"),
+        "stdout: {stdout}"
+    );
 }
