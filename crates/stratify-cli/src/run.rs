@@ -93,11 +93,26 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
 }
 
 fn load_boundary_config(root: &Path) -> stratify_analysis::boundaries::BoundaryConfig {
+    use stratify_analysis::boundaries::resolve;
     let path = root.join("stratify.toml");
     match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text).unwrap_or_default(),
-        Err(_) => stratify_analysis::boundaries::BoundaryConfig::default(),
+        Ok(text) => resolve(toml::from_str(&text).unwrap_or_default()),
+        Err(_) => resolve(autodetect_preset(root)),
     }
+}
+
+/// With no stratify.toml, guess a preset from the project layout. Returns an
+/// empty config (no boundary checks) when nothing matches.
+fn autodetect_preset(root: &Path) -> stratify_analysis::boundaries::BoundaryConfig {
+    use stratify_analysis::boundaries::BoundaryConfig;
+    let preset = if root.join("app/controllers").is_dir() || root.join("config/routes.rb").is_file() {
+        Some("rails".to_string())
+    } else if root.join("pom.xml").is_file() || root.join("build.gradle").is_file() {
+        Some("layered".to_string())
+    } else {
+        None
+    };
+    BoundaryConfig { preset, ..Default::default() }
 }
 
 /// Returns true if any finding in `report` has severity >= `threshold`.
