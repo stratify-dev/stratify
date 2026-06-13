@@ -19,6 +19,7 @@ const HOTSPOT_THRESHOLD: u32 = 50;
 pub enum Format {
     Human,
     Json,
+    Sarif,
 }
 
 /// Walk `root`, parse every file a registered adapter handles, merge into one

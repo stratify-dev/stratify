@@ -64,6 +64,32 @@ The first run compiles Stratify from source, which takes a few minutes.
 |-------|---------|-------------|
 | `path` | `.` | Directory to analyse. |
 | `fail-on` | `warning` | Minimum severity that fails the step: `never`, `info`, `warning`, or `error`. |
-| `format` | `human` | Output format: `human` or `json`. |
+| `format` | `human` | Output format: `human`, `json`, or `sarif`. |
 
 The step exits non-zero (and fails the job) when at least one finding meets or exceeds the `fail-on` threshold.
+
+## SARIF / GitHub code scanning
+
+Stratify emits SARIF 2.1.0 so GitHub and GitLab render findings as inline annotations:
+
+```sh
+stratify check . --format sarif > stratify.sarif
+```
+
+Upload it to GitHub code scanning in a workflow:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: stratify-dev/stratify@main
+  with:
+    fail-on: never
+- run: stratify check . --format sarif > stratify.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: stratify.sarif
+```
+
+The Stratify action installs the `stratify` binary and runs the gate; the
+follow-up step reuses the installed binary to write a SARIF file for upload.
+Set `fail-on: never` on the action step if you want findings to appear in code
+scanning without failing the build.
