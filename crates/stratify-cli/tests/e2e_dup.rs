@@ -11,7 +11,13 @@ fn sample_dup_reports_duplication() {
         .output()
         .expect("run stratify binary");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"rule\": \"duplication\""), "stdout: {stdout}");
+    assert!(
+        stdout.contains("\"rule\": \"duplication\""),
+        "stdout: {stdout}"
+    );
     // The clone spans the two files.
-    assert!(stdout.contains("one.rb") && stdout.contains("two.rb"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("one.rb") && stdout.contains("two.rb"),
+        "stdout: {stdout}"
+    );
 }

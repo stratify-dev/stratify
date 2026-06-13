@@ -1,5 +1,7 @@
 use stratify_core::ir::{Span, SymbolId};
-use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility};
+use stratify_core::{
+    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
+};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
@@ -26,8 +28,11 @@ fn text<'a>(node: Node, src: &'a str) -> &'a str {
 fn normalize_java(kind: &str, text: &str) -> String {
     match kind {
         "identifier" | "type_identifier" => "ID".to_string(),
-        "decimal_integer_literal" | "hex_integer_literal" | "octal_integer_literal"
-        | "binary_integer_literal" | "decimal_floating_point_literal"
+        "decimal_integer_literal"
+        | "hex_integer_literal"
+        | "octal_integer_literal"
+        | "binary_integer_literal"
+        | "decimal_floating_point_literal"
         | "hex_floating_point_literal" => "NUM".to_string(),
         "string_literal" | "character_literal" => "STR".to_string(),
         _ => text.to_string(),
@@ -227,8 +232,8 @@ mod tests {
         let norms: Vec<&str> = g.tokens().iter().map(|t| t.norm.as_str()).collect();
         // identifiers normalized to ID, the literal 5 to NUM, keywords/punct literal.
         assert!(norms.contains(&"class"));
-        assert!(norms.contains(&"ID"));   // A / int-name / x
-        assert!(norms.contains(&"NUM"));  // 5
+        assert!(norms.contains(&"ID")); // A / int-name / x
+        assert!(norms.contains(&"NUM")); // 5
         assert!(norms.contains(&"{"));
     }
 
@@ -279,5 +284,4 @@ mod tests {
             .iter()
             .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
     }
-
 }

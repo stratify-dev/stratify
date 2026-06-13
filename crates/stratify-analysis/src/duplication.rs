@@ -100,7 +100,9 @@ mod tests {
         assert!(!findings.is_empty());
         assert_eq!(findings[0].rule, "duplication");
         // The first region is in a.rb and points at b.rb.
-        assert!(findings.iter().any(|f| f.span.file == "a.rb" && f.message.contains("b.rb")));
+        assert!(findings
+            .iter()
+            .any(|f| f.span.file == "a.rb" && f.message.contains("b.rb")));
     }
 
     #[test]
@@ -127,9 +129,12 @@ mod tests {
         // a.rb + b.rb tokens concatenated happen to equal c.rb's content,
         // but that is a boundary artifact, not a real clone. Must report nothing.
         let mut g = IrGraph::new();
-        push(&mut g, "a.rb", &["ID", "=", "NUM"], 1);   // 3 tokens
-        push(&mut g, "b.rb", &["+", "ID"], 1);          // 2 tokens
+        push(&mut g, "a.rb", &["ID", "=", "NUM"], 1); // 3 tokens
+        push(&mut g, "b.rb", &["+", "ID"], 1); // 2 tokens
         push(&mut g, "c.rb", &["ID", "=", "NUM", "+", "ID"], 1); // 5 tokens, single file
-        assert!(analyze(&g, 5).is_empty(), "boundary straddle must not be a clone");
+        assert!(
+            analyze(&g, 5).is_empty(),
+            "boundary straddle must not be a clone"
+        );
     }
 }
