@@ -102,6 +102,27 @@ fn cyclomatic_ruby(node: Node) -> u32 {
     1 + count_decisions_ruby(node)
 }
 
+fn resolve_require_relative(importer_file: &str, arg: &str) -> String {
+    use std::path::{Component, Path};
+    let dir = Path::new(importer_file).parent().unwrap_or_else(|| Path::new(""));
+    let joined = dir.join(arg);
+    let mut parts: Vec<String> = Vec::new();
+    for comp in joined.components() {
+        match comp {
+            Component::Normal(s) => parts.push(s.to_string_lossy().to_string()),
+            Component::ParentDir => {
+                parts.pop();
+            }
+            _ => {}
+        }
+    }
+    let mut p = parts.join("/");
+    if !p.ends_with(".rb") {
+        p.push_str(".rb");
+    }
+    p
+}
+
 /// Extract modules, classes, and methods into a per-file graph. The file itself
 /// becomes a `File` symbol; all top-level and nested definitions get `Defines` edges from it.
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
@@ -268,6 +289,51 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         });
     }
 
+    // Import pass: emit a Dependency symbol per require_relative and an Imports edge from the file.
+    let req_q = Query::new(
+        &tree_sitter_ruby::LANGUAGE.into(),
+        r#"(call
+            method: (identifier) @m
+            arguments: (argument_list (string (string_content) @arg)))"#,
+    )
+    .expect("require query");
+    let m_idx = req_q.capture_index_for_name("m").unwrap();
+    let arg_idx = req_q.capture_index_for_name("arg").unwrap();
+    let mut rcur = QueryCursor::new();
+    let mut rmatches = rcur.matches(&req_q, root, src.as_bytes());
+    while let Some(mt) = rmatches.next() {
+        let mut is_req = false;
+        let mut arg_node = None;
+        for cap in mt.captures {
+            if cap.index == m_idx && text(cap.node, src) == "require_relative" {
+                is_req = true;
+            } else if cap.index == arg_idx {
+                arg_node = Some(cap.node);
+            }
+        }
+        if !is_req {
+            continue;
+        }
+        let Some(arg_node) = arg_node else { continue };
+        let key = resolve_require_relative(file, text(arg_node, src));
+        let dep = g.add_symbol(Symbol {
+            id: SymbolId(0),
+            kind: SymbolKind::Dependency,
+            name: key.clone(),
+            fqn: key,
+            span: span(file, arg_node),
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
+        g.add_reference(Reference {
+            from: file_id,
+            to: dep,
+            kind: RefKind::Imports,
+            span: span(file, arg_node),
+            confidence: Confidence::Certain,
+        });
+    }
+
     g
 }
 
@@ -378,5 +444,30 @@ mod tests {
             .references()
             .iter()
             .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
+    }
+
+    #[test]
+    fn file_fqn_is_path() {
+        let g = extract("lib/a.rb", "def x\nend\n");
+        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        assert_eq!(f.fqn, "lib/a.rb");
+    }
+
+    #[test]
+    fn emits_require_relative_edge_with_resolved_key() {
+        // from lib/a.rb, require_relative "b" -> key lib/b.rb
+        let g = extract("lib/a.rb", "require_relative \"b\"\n");
+        let dep = g.symbols().iter().find(|s| s.kind == SymbolKind::Dependency && s.name == "lib/b.rb");
+        assert!(dep.is_some(), "expected Dependency keyed lib/b.rb");
+        let file_id = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        assert!(g.references().iter().any(|r|
+            matches!(r.kind, RefKind::Imports) && r.from == file_id && r.to == dep.unwrap().id));
+    }
+
+    #[test]
+    fn require_relative_handles_parent_dir() {
+        // from lib/sub/a.rb, require_relative "../c" -> key lib/c.rb
+        let g = extract("lib/sub/a.rb", "require_relative \"../c\"\n");
+        assert!(g.symbols().iter().any(|s| s.kind == SymbolKind::Dependency && s.name == "lib/c.rb"));
     }
 }
