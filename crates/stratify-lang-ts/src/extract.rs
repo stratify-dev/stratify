@@ -128,6 +128,37 @@ fn cyclomatic_ts(node: Node) -> u32 {
     1 + count_decisions_ts(node)
 }
 
+/// Resolve a TypeScript import specifier to an extension-stripped module key.
+/// Returns `None` for bare/package specifiers (not starting with `.`).
+fn resolve_ts_import(importer_file: &str, spec: &str) -> Option<String> {
+    if !spec.starts_with('.') {
+        return None;
+    }
+    use std::path::{Component, Path};
+    let dir = Path::new(importer_file)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    let joined = dir.join(spec);
+    let mut parts: Vec<String> = Vec::new();
+    for comp in joined.components() {
+        match comp {
+            Component::Normal(s) => parts.push(s.to_string_lossy().to_string()),
+            Component::ParentDir => {
+                parts.pop();
+            }
+            _ => {}
+        }
+    }
+    let mut p = parts.join("/");
+    for ext in [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx"] {
+        if let Some(stripped) = p.strip_suffix(ext) {
+            p = stripped.to_string();
+            break;
+        }
+    }
+    Some(p)
+}
+
 /// Find the method that lexically encloses `node` by matching byte ranges against
 /// known Function symbols in this file's graph.
 fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> {
@@ -246,6 +277,45 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             // Set complexity for functions.
             if kind == SymbolKind::Function {
                 g.set_complexity(id, cyclomatic_ts(decl_node));
+            }
+        }
+    }
+
+    // Import pass: resolve relative specifiers to Dependency symbols + Imports edges.
+    {
+        let import_q = Query::new(
+            &lang,
+            r#"(import_statement source: (string (string_fragment) @spec))"#,
+        )
+        .expect("ts import query");
+
+        let spec_idx = import_q.capture_index_for_name("spec").unwrap();
+        let mut imp_cursor = QueryCursor::new();
+        let mut imp_matches = imp_cursor.matches(&import_q, root, src.as_bytes());
+        while let Some(m) = imp_matches.next() {
+            for cap in m.captures {
+                if cap.index != spec_idx {
+                    continue;
+                }
+                let spec_text = text(cap.node, src);
+                if let Some(key) = resolve_ts_import(file, spec_text) {
+                    let dep_id = g.add_symbol(Symbol {
+                        id: SymbolId(0),
+                        kind: SymbolKind::Dependency,
+                        name: key.clone(),
+                        fqn: key,
+                        span: span(file, cap.node),
+                        visibility: Visibility::Unknown,
+                        confidence: Confidence::Certain,
+                    });
+                    g.add_reference(Reference {
+                        from: file_id,
+                        to: dep_id,
+                        kind: RefKind::Imports,
+                        span: span(file, cap.node),
+                        confidence: Confidence::Certain,
+                    });
+                }
             }
         }
     }
@@ -386,5 +456,65 @@ mod tests {
         let g = extract("c.ts", src);
         let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
         assert_eq!(g.complexity_of(m), Some(4));
+    }
+
+    #[test]
+    fn relative_import_edge() {
+        // from src/a.ts, import from "./b" -> key src/b ; bare specifier ignored.
+        let g = extract(
+            "src/a.ts",
+            "import { x } from \"./b\";\nimport React from \"react\";\n",
+        );
+        let dep = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::Dependency && s.name == "src/b");
+        assert!(dep.is_some(), "expected Dependency keyed src/b");
+        assert!(
+            !g.symbols()
+                .iter()
+                .any(|s| s.kind == SymbolKind::Dependency && s.name == "react"),
+            "bare specifier should be ignored"
+        );
+        let file_id = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
+        assert!(g.references().iter().any(|r| matches!(r.kind, RefKind::Imports)
+            && r.from == file_id
+            && r.to == dep.unwrap().id));
+    }
+
+    #[test]
+    fn import_key_matches_file_fqn() {
+        // a.ts importing "./b" yields key "b"; b.ts has fqn "b" -> they match.
+        let importer = extract("a.ts", "import \"./b\";\n");
+        let imported = extract("b.ts", "export const z = 1;\n");
+        let key = importer
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::Dependency)
+            .unwrap()
+            .name
+            .clone();
+        let fqn = imported
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .fqn
+            .clone();
+        assert_eq!(key, fqn);
+    }
+
+    #[test]
+    fn parent_dir_import() {
+        let g = extract("src/sub/a.ts", "import \"../b\";\n");
+        assert!(g
+            .symbols()
+            .iter()
+            .any(|s| s.kind == SymbolKind::Dependency && s.name == "src/b"));
     }
 }
