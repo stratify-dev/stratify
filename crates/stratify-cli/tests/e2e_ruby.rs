@@ -16,5 +16,8 @@ fn sample_ruby_reports_unused_methods() {
     assert!(stdout.contains("never_called"), "stdout: {stdout}");
     assert!(stdout.contains("warn"), "stdout: {stdout}");
     // helper is called at top level via a Likely edge -> possibly unused (info).
-    assert!(stdout.contains("helper") && stdout.contains("possibly unused"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("helper") && stdout.contains("possibly unused"),
+        "stdout: {stdout}"
+    );
 }

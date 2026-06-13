@@ -133,8 +133,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             if cap.index == callee_idx {
                 let callee_name = text(cap.node, src);
                 if let Some(&callee_id) = name_to_id.get(callee_name) {
-                    let from = enclosing_method_id(cap.node, &g, file)
-                        .unwrap_or(file_id);
+                    let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                     edges.push((from, callee_id));
                 }
             }
@@ -142,11 +141,8 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     }
 
     // Query B: bare identifier command calls like `greet` (no parens, no receiver).
-    let ident_query = Query::new(
-        &tree_sitter_ruby::LANGUAGE.into(),
-        r#"(identifier) @ident"#,
-    )
-    .expect("valid ruby ident query");
+    let ident_query = Query::new(&tree_sitter_ruby::LANGUAGE.into(), r#"(identifier) @ident"#)
+        .expect("valid ruby ident query");
 
     let ident_idx = ident_query.capture_index_for_name("ident").unwrap();
 
@@ -167,8 +163,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                     ) {
                         continue;
                     }
-                    let from = enclosing_method_id(cap.node, &g, file)
-                        .unwrap_or(file_id);
+                    let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                     edges.push((from, callee_id));
                 }
             }
@@ -213,7 +208,11 @@ mod tests {
     fn extracts_module_class_method() {
         let src = "module M\n  class Foo\n    def bar\n    end\n  end\nend\n";
         let g = extract("foo.rb", src);
-        let kinds: Vec<_> = g.symbols().iter().map(|s| (s.kind, s.name.as_str())).collect();
+        let kinds: Vec<_> = g
+            .symbols()
+            .iter()
+            .map(|s| (s.kind, s.name.as_str()))
+            .collect();
         assert!(kinds.contains(&(SymbolKind::File, "foo.rb")));
         assert!(kinds.contains(&(SymbolKind::Module, "M")));
         assert!(kinds.contains(&(SymbolKind::Class, "Foo")));
@@ -226,7 +225,10 @@ mod tests {
         let g = extract("a.rb", src);
         // Defines edges: class A, method m => 2.
         assert_eq!(
-            g.references().iter().filter(|r| matches!(r.kind, RefKind::Defines)).count(),
+            g.references()
+                .iter()
+                .filter(|r| matches!(r.kind, RefKind::Defines))
+                .count(),
             2
         );
     }
@@ -235,7 +237,12 @@ mod tests {
     fn marks_file_as_entrypoint() {
         let src = "def a\nend\n";
         let g = extract("x.rb", src);
-        let file_id = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        let file_id = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
         assert_eq!(g.entrypoints(), &[file_id]);
     }
 
@@ -244,10 +251,17 @@ mod tests {
         // `greet` is defined and called at top level -> File --Calls--> greet.
         let src = "def greet\n  puts 'hi'\nend\n\ngreet\n";
         let g = extract("x.rb", src);
-        let file_id = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        let file_id = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
         let greet_id = g.symbols().iter().find(|s| s.name == "greet").unwrap().id;
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Calls) && r.from == file_id && r.to == greet_id));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Calls) && r.from == file_id && r.to == greet_id));
     }
 
     #[test]
@@ -256,8 +270,10 @@ mod tests {
         let g = extract("x.rb", src);
         let a_id = g.symbols().iter().find(|s| s.name == "a").unwrap().id;
         let b_id = g.symbols().iter().find(|s| s.name == "b").unwrap().id;
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
     }
 }
 // Temporary review tests - will be removed
