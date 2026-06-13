@@ -14,7 +14,10 @@ pub enum Format {
 /// Walk `root`, parse every file a registered adapter handles, merge into one
 /// IrGraph, run dead-code, and return the Report.
 pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
-    let adapters: Vec<Box<dyn LanguageAdapter>> = vec![Box::new(JavaAdapter)];
+    let adapters: Vec<Box<dyn LanguageAdapter>> = vec![
+        Box::new(JavaAdapter),
+        Box::new(stratify_lang_ruby::RubyAdapter),
+    ];
 
     let mut graph = IrGraph::new();
     for entry in WalkBuilder::new(root).build() {
