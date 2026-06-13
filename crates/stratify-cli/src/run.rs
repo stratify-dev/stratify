@@ -35,6 +35,7 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
     let adapters: Vec<Box<dyn LanguageAdapter>> = vec![
         Box::new(JavaAdapter),
         Box::new(stratify_lang_ruby::RubyAdapter),
+        Box::new(stratify_lang_ts::TsAdapter),
     ];
 
     let mut graph = IrGraph::new();
