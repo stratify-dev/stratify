@@ -2,24 +2,11 @@ use std::collections::HashSet;
 use stratify_core::ir::SymbolId;
 use stratify_core::{Confidence, Finding, IrGraph, RefKind, Severity, SymbolKind};
 
-/// A symbol is an entrypoint if it is a function named `main`. For M1 (Java),
-/// `main` methods are the only roots. Framework and file-based roots come in a
-/// later milestone.
-fn is_entrypoint(name: &str, kind: SymbolKind) -> bool {
-    matches!(kind, SymbolKind::Function) && name == "main"
-}
-
 /// Find functions that no entrypoint can reach via Calls/Defines edges.
 /// A function reachable only through a low-confidence edge is reported as
 /// "possibly unused" (Info) rather than "dead" (Warning).
 pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
-    // Build adjacency: from -> [(to, confidence)].
-    let mut roots: Vec<SymbolId> = Vec::new();
-    for s in graph.symbols() {
-        if is_entrypoint(&s.name, s.kind) {
-            roots.push(s.id);
-        }
-    }
+    let roots: Vec<SymbolId> = graph.entrypoints().to_vec();
 
     // BFS reachability. Track the weakest edge confidence used to reach a node.
     let mut reached_certain: HashSet<SymbolId> = HashSet::new();
@@ -116,7 +103,8 @@ mod tests {
     #[test]
     fn unreached_function_is_dead() {
         let mut g = IrGraph::new();
-        let _main = func(&mut g, "main");
+        let main = func(&mut g, "main");
+        g.mark_entrypoint(main);
         let _orphan = func(&mut g, "orphan");
         let findings = analyze(&g);
         assert_eq!(findings.len(), 1);
@@ -128,6 +116,7 @@ mod tests {
     fn reached_via_certain_edge_is_not_reported() {
         let mut g = IrGraph::new();
         let main = func(&mut g, "main");
+        g.mark_entrypoint(main);
         let used = func(&mut g, "used");
         edge(&mut g, main, used, Confidence::Certain);
         assert!(analyze(&g).is_empty());
@@ -137,6 +126,7 @@ mod tests {
     fn reached_only_via_likely_edge_is_possibly_unused() {
         let mut g = IrGraph::new();
         let main = func(&mut g, "main");
+        g.mark_entrypoint(main);
         let maybe = func(&mut g, "maybe");
         edge(&mut g, main, maybe, Confidence::Likely);
         let findings = analyze(&g);
