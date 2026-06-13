@@ -34,6 +34,7 @@ enum Command {
 enum FormatArg {
     Human,
     Json,
+    Sarif,
 }
 
 impl From<FormatArg> for Format {
@@ -41,6 +42,7 @@ impl From<FormatArg> for Format {
         match f {
             FormatArg::Human => Format::Human,
             FormatArg::Json => Format::Json,
+            FormatArg::Sarif => Format::Sarif,
         }
     }
 }
@@ -83,6 +85,7 @@ fn main() -> ExitCode {
             let rendered = match Format::from(format) {
                 Format::Human => stratify_report::human::render(&report),
                 Format::Json => stratify_report::json::render(&report),
+                Format::Sarif => stratify_report::sarif::render(&report),
             };
             print!("{rendered}");
 
