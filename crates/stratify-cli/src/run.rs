@@ -70,6 +70,7 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
         &churn,
         HOTSPOT_THRESHOLD,
     ));
+    findings.extend(stratify_analysis::cycles::analyze(&graph));
     Ok(Report::new(findings))
 }
 
