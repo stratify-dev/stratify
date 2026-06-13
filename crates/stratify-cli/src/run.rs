@@ -72,7 +72,10 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
     ));
     findings.extend(stratify_analysis::cycles::analyze(&graph));
     let boundary_config = load_boundary_config(root);
-    findings.extend(stratify_analysis::boundaries::analyze(&graph, &boundary_config));
+    findings.extend(stratify_analysis::boundaries::analyze(
+        &graph,
+        &boundary_config,
+    ));
     Ok(Report::new(findings))
 }
 

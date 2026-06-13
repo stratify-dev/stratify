@@ -1,6 +1,6 @@
-use std::collections::HashSet;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
+use std::collections::HashSet;
 use stratify_core::ir::Span;
 use stratify_core::{Confidence, Finding, IrGraph, Severity};
 
@@ -105,7 +105,12 @@ mod tests {
             kind: SymbolKind::File,
             name: path.into(),
             fqn: path.into(),
-            span: Span { file: path.into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: path.into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         })
@@ -117,7 +122,12 @@ mod tests {
             kind: SymbolKind::Dependency,
             name: key.into(),
             fqn: key.into(),
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });
@@ -125,7 +135,12 @@ mod tests {
             from,
             to: d,
             kind: RefKind::Imports,
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             confidence: Confidence::Certain,
         });
     }
@@ -133,10 +148,16 @@ mod tests {
     fn config() -> BoundaryConfig {
         let mut layers = std::collections::BTreeMap::new();
         layers.insert("models".to_string(), vec!["models/**".to_string()]);
-        layers.insert("controllers".to_string(), vec!["controllers/**".to_string()]);
+        layers.insert(
+            "controllers".to_string(),
+            vec!["controllers/**".to_string()],
+        );
         BoundaryConfig {
             layers,
-            forbid: vec![ForbidRule { from: "models".into(), to: "controllers".into() }],
+            forbid: vec![ForbidRule {
+                from: "models".into(),
+                to: "controllers".into(),
+            }],
         }
     }
 
@@ -144,7 +165,10 @@ mod tests {
     fn glob_classifies_nested_file() {
         let layers = compile_layers(&config());
         assert_eq!(classify("models/user.rb", &layers), Some("models"));
-        assert_eq!(classify("controllers/users.rb", &layers), Some("controllers"));
+        assert_eq!(
+            classify("controllers/users.rb", &layers),
+            Some("controllers")
+        );
         assert_eq!(classify("lib/util.rb", &layers), None);
     }
 

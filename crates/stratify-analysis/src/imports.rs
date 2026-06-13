@@ -10,8 +10,13 @@ use stratify_core::{IrGraph, RefKind, SymbolKind};
 pub fn file_import_graph(graph: &IrGraph) -> BTreeMap<String, BTreeSet<String>> {
     let mut export: HashMap<&str, String> = HashMap::new();
     for s in graph.symbols() {
-        if matches!(s.kind, SymbolKind::File | SymbolKind::Class | SymbolKind::Module) {
-            export.entry(s.fqn.as_str()).or_insert_with(|| s.span.file.clone());
+        if matches!(
+            s.kind,
+            SymbolKind::File | SymbolKind::Class | SymbolKind::Module
+        ) {
+            export
+                .entry(s.fqn.as_str())
+                .or_insert_with(|| s.span.file.clone());
         }
     }
 
@@ -46,7 +51,9 @@ pub fn file_spans(graph: &IrGraph) -> HashMap<String, Span> {
     let mut spans = HashMap::new();
     for s in graph.symbols() {
         if matches!(s.kind, SymbolKind::File) {
-            spans.entry(s.span.file.clone()).or_insert_with(|| s.span.clone());
+            spans
+                .entry(s.span.file.clone())
+                .or_insert_with(|| s.span.clone());
         }
     }
     spans
