@@ -1,6 +1,6 @@
+use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use serde_json::{json, Value};
 use stratify_core::Severity;
 
 /// A minimal stdio Language Server for Stratify diagnostics.
@@ -220,7 +220,11 @@ mod tests {
         let out = s.handle(&req);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["result"]["serverInfo"]["name"], "stratify");
-        assert!(out[0]["result"]["capabilities"]["textDocumentSync"]["openClose"].as_bool().unwrap());
+        assert!(
+            out[0]["result"]["capabilities"]["textDocumentSync"]["openClose"]
+                .as_bool()
+                .unwrap()
+        );
         assert!(s.root.is_some());
     }
 
@@ -231,7 +235,9 @@ mod tests {
         let out = s.handle(&json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{}}));
         assert!(!out.is_empty(), "expected publishDiagnostics");
         // every emitted message is a publishDiagnostics notification
-        assert!(out.iter().all(|m| m["method"] == "textDocument/publishDiagnostics"));
+        assert!(out
+            .iter()
+            .all(|m| m["method"] == "textDocument/publishDiagnostics"));
         // at least one diagnostic from the dead_code rule exists across files
         let has_dead_code = out.iter().any(|m| {
             m["params"]["diagnostics"]
@@ -265,7 +271,11 @@ mod tests {
         s.handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri": fixture_uri()}}));
         let out = s.handle(&json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{}}));
         // a published uri ends with /unused.rb (a fixture file with a finding)
-        assert!(out.iter().any(|m| m["params"]["uri"].as_str().unwrap().ends_with("/unused.rb")), "out: {out:?}");
+        assert!(
+            out.iter()
+                .any(|m| m["params"]["uri"].as_str().unwrap().ends_with("/unused.rb")),
+            "out: {out:?}"
+        );
     }
 
     #[test]
@@ -280,8 +290,13 @@ mod tests {
     #[test]
     fn unknown_request_is_method_not_found_notification_ignored() {
         let mut s = Server::new();
-        assert_eq!(s.handle(&json!({"jsonrpc":"2.0","id":5,"method":"bogus"}))[0]["error"]["code"], -32601);
-        assert!(s.handle(&json!({"jsonrpc":"2.0","method":"$/someNotification"})).is_empty());
+        assert_eq!(
+            s.handle(&json!({"jsonrpc":"2.0","id":5,"method":"bogus"}))[0]["error"]["code"],
+            -32601
+        );
+        assert!(s
+            .handle(&json!({"jsonrpc":"2.0","method":"$/someNotification"}))
+            .is_empty());
     }
 
     #[test]

@@ -25,7 +25,7 @@ fn read_framed<R: std::io::BufRead>(r: &mut R) -> Option<String> {
     let len = len?;
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf).ok()?;
-    Some(String::from_utf8(buf).ok()?)
+    String::from_utf8(buf).ok()
 }
 
 #[test]
@@ -47,10 +47,14 @@ fn lsp_publishes_diagnostics_on_did_open() {
         );
         stdin.write_all(&frame(&init)).unwrap();
         stdin
-            .write_all(&frame("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"))
+            .write_all(&frame(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}",
+            ))
             .unwrap();
         stdin
-            .write_all(&frame("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{}}"))
+            .write_all(&frame(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{}}",
+            ))
             .unwrap();
         stdin
             .write_all(&frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"))
@@ -62,7 +66,10 @@ fn lsp_publishes_diagnostics_on_did_open() {
 
     // First framed message is the initialize response.
     let init_resp = read_framed(&mut reader).expect("initialize response");
-    assert!(init_resp.contains("\"name\":\"stratify\""), "init: {init_resp}");
+    assert!(
+        init_resp.contains("\"name\":\"stratify\""),
+        "init: {init_resp}"
+    );
 
     // Subsequent framed messages include publishDiagnostics with a dead_code finding.
     let mut saw_dead_code = false;
@@ -71,7 +78,10 @@ fn lsp_publishes_diagnostics_on_did_open() {
             saw_dead_code = true;
         }
     }
-    assert!(saw_dead_code, "expected a publishDiagnostics with dead_code");
+    assert!(
+        saw_dead_code,
+        "expected a publishDiagnostics with dead_code"
+    );
 
     let _ = child.wait();
 }
