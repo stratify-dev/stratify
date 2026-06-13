@@ -108,6 +108,49 @@ fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> 
         .map(|s| s.id)
 }
 
+/// Convert a dotted module name to a path-style key (`a.b.c` -> `a/b/c`).
+fn dotted_to_path(dotted: &str) -> String {
+    dotted.replace('.', "/")
+}
+
+/// Resolve a relative import to a path key.
+///
+/// `dots` is the number of leading dots; `module` is the dotted module after
+/// the dots (may be empty for `from . import name`). `name` is an imported
+/// name used only when `module` is empty.
+fn resolve_relative_py(
+    importer_file: &str,
+    dots: usize,
+    module: &str,
+    name: Option<&str>,
+) -> Option<String> {
+    use std::path::Path;
+    let dir = Path::new(importer_file)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    let mut parts: Vec<String> = dir
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+    // 1 dot = current package (importer dir); each extra dot pops one level.
+    for _ in 0..dots.saturating_sub(1) {
+        parts.pop();
+    }
+    if !module.is_empty() {
+        for seg in module.split('.') {
+            parts.push(seg.to_string());
+        }
+    } else if let Some(n) = name {
+        parts.push(n.to_string());
+    } else {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
 
@@ -250,6 +293,107 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         });
     }
 
+    // Import pass: collect path keys for each import statement and emit
+    // Dependency symbols + Imports edges.
+    //
+    // Actual tree-sitter-python shapes (verified via to_sexp()):
+    //   import a.b      -> (import_statement name: (dotted_name ...))
+    //   from c.d import x
+    //                   -> (import_from_statement module_name: (dotted_name ...)
+    //                         name: (dotted_name ...))
+    //   from .sib import y
+    //                   -> (import_from_statement
+    //                         module_name: (relative_import (import_prefix) (dotted_name ...))
+    //                         name: (dotted_name ...))
+    //   from . import sub
+    //                   -> (import_from_statement
+    //                         module_name: (relative_import (import_prefix))
+    //                         name: (dotted_name ...))
+    let mut import_keys: Vec<String> = Vec::new();
+    let mut cursor2 = root.walk();
+    for stmt in root.children(&mut cursor2) {
+        match stmt.kind() {
+            "import_statement" => {
+                // `import a.b` — find the `name:` dotted_name child
+                for i in 0..stmt.child_count() {
+                    let child = stmt.child(i).unwrap();
+                    if child.kind() == "dotted_name" {
+                        import_keys.push(dotted_to_path(text(child, src)));
+                    }
+                }
+            }
+            "import_from_statement" => {
+                let module_name_node = stmt.child_by_field_name("module_name");
+                if let Some(mn) = module_name_node {
+                    match mn.kind() {
+                        "dotted_name" => {
+                            // Absolute: from c.d import x -> key c/d
+                            import_keys.push(dotted_to_path(text(mn, src)));
+                        }
+                        "relative_import" => {
+                            // Count dots via import_prefix node text
+                            let mut dots = 0usize;
+                            let mut dotted_module = String::new();
+                            let mut mn_cursor = mn.walk();
+                            for child in mn.children(&mut mn_cursor) {
+                                match child.kind() {
+                                    "import_prefix" => {
+                                        dots = text(child, src).chars().filter(|&c| c == '.').count();
+                                    }
+                                    "dotted_name" => {
+                                        dotted_module = text(child, src).to_string();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if !dotted_module.is_empty() {
+                                // from .sib import y -> resolve against file
+                                if let Some(key) = resolve_relative_py(file, dots, &dotted_module, None) {
+                                    import_keys.push(key);
+                                }
+                            } else {
+                                // from . import sub -> one key per imported name
+                                // The name: children of import_from_statement are dotted_names
+                                let mut stmt_cursor = stmt.walk();
+                                for name_node in stmt.children_by_field_name("name", &mut stmt_cursor) {
+                                    // Each name is a dotted_name; grab its first identifier
+                                    let imported_name = text(name_node, src);
+                                    if let Some(key) = resolve_relative_py(file, dots, "", Some(imported_name)) {
+                                        import_keys.push(key);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Emit Dependency symbols and Imports edges for each resolved key.
+    import_keys.sort_unstable();
+    import_keys.dedup();
+    for key in import_keys {
+        let dep_id = g.add_symbol(Symbol {
+            id: SymbolId(0),
+            kind: SymbolKind::Dependency,
+            name: key.clone(),
+            fqn: key,
+            span: span(file, root),
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
+        g.add_reference(Reference {
+            from: file_id,
+            to: dep_id,
+            kind: RefKind::Imports,
+            span: span(file, root),
+            confidence: Confidence::Certain,
+        });
+    }
+
     g
 }
 
@@ -257,6 +401,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
 mod tests {
     use super::*;
     use stratify_core::SymbolKind;
+
 
     #[test]
     fn file_is_entrypoint() {
@@ -312,5 +457,40 @@ mod tests {
         assert!(norms.contains(&"ID"));   // x
         assert!(norms.contains(&"NUM"));  // 5
         assert!(norms.contains(&"="));
+    }
+
+    #[test]
+    fn absolute_import_keys() {
+        // import a.b  -> key a/b ; from c.d import x -> key c/d
+        let g = extract("m.py", "import a.b\nfrom c.d import x\n");
+        let deps: Vec<&str> = g.symbols().iter()
+            .filter(|s| s.kind == SymbolKind::Dependency).map(|s| s.name.as_str()).collect();
+        assert!(deps.contains(&"a/b"), "deps: {deps:?}");
+        assert!(deps.contains(&"c/d"), "deps: {deps:?}");
+    }
+
+    #[test]
+    fn import_key_matches_file_fqn() {
+        // pkg/a.py: from b import x -> key "b"; pkg/b.py fqn (when scanned at pkg/) -> "b"
+        let importer = extract("a.py", "from b import x\n");
+        let imported = extract("b.py", "def z():\n    pass\n");
+        let key = importer.symbols().iter().find(|s| s.kind == SymbolKind::Dependency).unwrap().name.clone();
+        let fqn = imported.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().fqn.clone();
+        assert_eq!(key, fqn);
+    }
+
+    #[test]
+    fn relative_import_with_module() {
+        // from pkg/mod.py: from .sib import y -> key pkg/sib
+        let g = extract("pkg/mod.py", "from .sib import y\n");
+        assert!(g.symbols().iter().any(|s| s.kind == SymbolKind::Dependency && s.name == "pkg/sib"),
+            "{:?}", g.symbols().iter().filter(|s| s.kind == SymbolKind::Dependency).map(|s| &s.name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn relative_import_bare_names() {
+        // from pkg/mod.py: from . import sub -> key pkg/sub (imported name is a submodule)
+        let g = extract("pkg/mod.py", "from . import sub\n");
+        assert!(g.symbols().iter().any(|s| s.kind == SymbolKind::Dependency && s.name == "pkg/sub"));
     }
 }
