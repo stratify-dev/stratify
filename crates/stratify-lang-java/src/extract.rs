@@ -78,6 +78,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         }
         if let (Some(name_node), Some(decl_node)) = (name_node, decl_node) {
             let name = text(name_node, src).to_string();
+            let is_main = kind == SymbolKind::Function && name == "main";
             let id = g.add_symbol(Symbol {
                 id: SymbolId(0),
                 kind,
@@ -94,6 +95,9 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 span: span(file, decl_node),
                 confidence: Confidence::Certain,
             });
+            if is_main {
+                g.mark_entrypoint(id);
+            }
         }
     }
 
@@ -196,6 +200,14 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn marks_main_method_as_entrypoint() {
+        let src = "class App { public static void main(String[] a) {} void other() {} }";
+        let g = extract("App.java", src);
+        let main_id = g.symbols().iter().find(|s| s.name == "main").unwrap().id;
+        assert_eq!(g.entrypoints(), &[main_id]);
     }
 
     #[test]
