@@ -1,6 +1,6 @@
+use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::Path;
-use serde_json::{json, Value};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -11,10 +11,7 @@ pub fn handle_request(req: &Value) -> Option<Value> {
     let id = req.get("id").cloned();
 
     // Notifications have no `id` and never get a response.
-    if id.is_none() {
-        return None;
-    }
-    let id = id.unwrap();
+    let id = id?;
 
     match method {
         "initialize" => {
@@ -65,7 +62,10 @@ fn handle_tools_call(id: Value, req: &Value) -> Value {
         Some(p) => p.to_string(),
         None => return tool_error(id, "missing required argument `path`".to_string()),
     };
-    let rule = args.get("rule").and_then(Value::as_str).map(|s| s.to_string());
+    let rule = args
+        .get("rule")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
 
     match crate::run::analyze_repo(Path::new(&path)) {
         Ok(report) => {
@@ -175,8 +175,7 @@ mod tests {
 
     #[test]
     fn tools_call_analyze_runs_on_fixture() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/sample-ruby");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sample-ruby");
         let req = json!({
             "jsonrpc":"2.0","id":4,"method":"tools/call",
             "params": { "name": "analyze", "arguments": { "path": dir.to_str().unwrap() } }
@@ -191,8 +190,7 @@ mod tests {
 
     #[test]
     fn tools_call_rule_filter() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/sample-ruby");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sample-ruby");
         let req = json!({
             "jsonrpc":"2.0","id":5,"method":"tools/call",
             "params": { "name": "analyze", "arguments": { "path": dir.to_str().unwrap(), "rule": "duplication" } }
