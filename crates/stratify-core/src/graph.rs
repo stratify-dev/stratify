@@ -5,6 +5,7 @@ use crate::ir::{Reference, Symbol, SymbolId};
 pub struct IrGraph {
     symbols: Vec<Symbol>,
     references: Vec<Reference>,
+    entrypoints: Vec<SymbolId>,
 }
 
 impl IrGraph {
@@ -37,6 +38,16 @@ impl IrGraph {
         self.symbols.get(id.0 as usize)
     }
 
+    /// Mark a symbol as an analysis entrypoint (a reachability root).
+    /// Adapters decide what is an entrypoint (e.g. Java `main`, Ruby file scope).
+    pub fn mark_entrypoint(&mut self, id: SymbolId) {
+        self.entrypoints.push(id);
+    }
+
+    pub fn entrypoints(&self) -> &[SymbolId] {
+        &self.entrypoints
+    }
+
     /// Merge another graph into this one, remapping the other graph's ids so
     /// they stay unique. Returns nothing; used to combine per-file graphs.
     pub fn merge(&mut self, other: IrGraph) {
@@ -49,6 +60,9 @@ impl IrGraph {
             r.from = SymbolId(r.from.0 + offset);
             r.to = SymbolId(r.to.0 + offset);
             self.references.push(r);
+        }
+        for e in other.entrypoints {
+            self.entrypoints.push(SymbolId(e.0 + offset));
         }
     }
 }
@@ -84,6 +98,28 @@ mod tests {
         assert_eq!(a, SymbolId(0));
         assert_eq!(b, SymbolId(1));
         assert_eq!(g.symbol(b).unwrap().name, "b");
+    }
+
+    #[test]
+    fn mark_and_read_entrypoints() {
+        let mut g = IrGraph::new();
+        let a = g.add_symbol(sym("a"));
+        g.mark_entrypoint(a);
+        assert_eq!(g.entrypoints(), &[a]);
+    }
+
+    #[test]
+    fn merge_remaps_entrypoints() {
+        let mut g1 = IrGraph::new();
+        g1.add_symbol(sym("a"));
+
+        let mut g2 = IrGraph::new();
+        let x = g2.add_symbol(sym("x"));
+        g2.mark_entrypoint(x);
+
+        g1.merge(g2);
+        // x was id 0 in g2, becomes id 1 after merge (offset 1).
+        assert_eq!(g1.entrypoints(), &[SymbolId(1)]);
     }
 
     #[test]
