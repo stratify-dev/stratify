@@ -279,4 +279,5 @@ mod tests {
             .iter()
             .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
     }
+
 }
