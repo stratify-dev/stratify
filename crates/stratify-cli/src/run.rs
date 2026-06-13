@@ -9,6 +9,9 @@ use stratify_lang_java::JavaAdapter;
 /// Minimum identical normalized-token run length to count as a clone.
 const DUP_MIN_TOKENS: usize = 40;
 
+/// Cyclomatic complexity above this is reported.
+const COMPLEXITY_THRESHOLD: u32 = 10;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Human,
@@ -54,6 +57,7 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
 
     let mut findings = deadcode::analyze(&graph);
     findings.extend(duplication::analyze(&graph, DUP_MIN_TOKENS));
+    findings.extend(stratify_analysis::complexity::analyze(&graph, COMPLEXITY_THRESHOLD));
     Ok(Report::new(findings))
 }
 
