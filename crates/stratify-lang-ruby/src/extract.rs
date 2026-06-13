@@ -69,6 +69,39 @@ fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
     }
 }
 
+fn count_decisions_ruby(node: Node) -> u32 {
+    let mut count = 0u32;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.is_named() {
+            match n.kind() {
+                "if" | "elsif" | "unless" | "while" | "until" | "for" | "when"
+                | "rescue" | "conditional" | "if_modifier" | "unless_modifier"
+                | "while_modifier" | "until_modifier" => {
+                    count += 1;
+                }
+                _ => {}
+            }
+        } else {
+            match n.kind() {
+                "&&" | "||" | "and" | "or" => {
+                    count += 1;
+                }
+                _ => {}
+            }
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    count
+}
+
+fn cyclomatic_ruby(node: Node) -> u32 {
+    1 + count_decisions_ruby(node)
+}
+
 /// Extract modules, classes, and methods into a per-file graph. The file itself
 /// becomes a `File` symbol; all top-level and nested definitions get `Defines` edges from it.
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
@@ -150,6 +183,10 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 span: span(file, decl_node),
                 confidence: Confidence::Certain,
             });
+            if kind == SymbolKind::Function {
+                let cx = cyclomatic_ruby(decl_node);
+                g.set_complexity(id, cx);
+            }
         }
     }
 
@@ -320,6 +357,15 @@ mod tests {
             .references()
             .iter()
             .any(|r| matches!(r.kind, RefKind::Calls) && r.from == file_id && r.to == greet_id));
+    }
+
+    #[test]
+    fn computes_method_complexity() {
+        // base 1 + if + elsif + while = 4
+        let src = "def m(x)\n  if x > 0\n  elsif x < 9\n  end\n  while x > 0\n  end\nend\n";
+        let g = extract("m.rb", src);
+        let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
+        assert_eq!(g.complexity_of(m), Some(4));
     }
 
     #[test]
