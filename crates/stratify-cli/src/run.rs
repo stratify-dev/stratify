@@ -36,6 +36,7 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
         Box::new(JavaAdapter),
         Box::new(stratify_lang_ruby::RubyAdapter),
         Box::new(stratify_lang_ts::TsAdapter),
+        Box::new(stratify_lang_py::PyAdapter),
     ];
 
     let mut graph = IrGraph::new();
