@@ -254,11 +254,10 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     // Query B: bare identifier command calls like `greet` (no parens, no receiver).
     //
     // A bare Ruby identifier is syntactically indistinguishable from a local-variable
-    // read, so on a miss we cannot safely decide whether the identifier is a call or
-    // a variable. To avoid flooding unresolved_calls with every variable reference,
-    // we only record in-file hits from this pass (same as before) and rely on Query A
-    // for cross-file call recording. The plan explicitly permits this conservative
-    // choice for the bare-identifier pass.
+    // read. We record in-file hits as Calls edges and misses as unresolved calls.
+    // The cross_file_calls pass drops any unresolved name that has no matching repo
+    // function, so variable names and builtins are silently ignored.
+    // We skip identifiers that are definition sites or parameter nodes.
     let ident_query = Query::new(&tree_sitter_ruby::LANGUAGE.into(), r#"(identifier) @ident"#)
         .expect("valid ruby ident query");
 
@@ -270,19 +269,21 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         for cap in m.captures {
             if cap.index == ident_idx {
                 let callee_name = text(cap.node, src);
-                // Only keep identifiers that match a known in-file method.
+                // Skip definition sites and parameter nodes.
+                let parent_kind = cap.node.parent().map(|p| p.kind()).unwrap_or("");
+                if matches!(
+                    parent_kind,
+                    "method" | "method_parameters" | "block_parameter" | "keyword_parameter"
+                ) {
+                    continue;
+                }
+                let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                 if let Some(&callee_id) = name_to_id.get(callee_name) {
-                    // Skip if this identifier is the method name in a `def` declaration
-                    // or is a parameter definition node.
-                    let parent_kind = cap.node.parent().map(|p| p.kind()).unwrap_or("");
-                    if matches!(
-                        parent_kind,
-                        "method" | "method_parameters" | "block_parameter" | "keyword_parameter"
-                    ) {
-                        continue;
-                    }
-                    let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
                     edges.push((from, callee_id));
+                } else {
+                    // Miss: could be a cross-file call. Record for later resolution.
+                    // The cross_file_calls pass drops names with no repo function match.
+                    unresolved.push((from, callee_name.to_string()));
                 }
             }
         }
@@ -525,4 +526,5 @@ mod tests {
             g.unresolved_calls()
         );
     }
+
 }
