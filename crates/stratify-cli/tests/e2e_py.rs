@@ -11,6 +11,9 @@ fn sample_py_reports_dead_code() {
         .output()
         .expect("run stratify binary");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"rule\": \"dead_code\""), "stdout: {stdout}");
+    assert!(
+        stdout.contains("\"rule\": \"dead_code\""),
+        "stdout: {stdout}"
+    );
     assert!(stdout.contains("never_called"), "stdout: {stdout}");
 }

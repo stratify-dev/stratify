@@ -76,8 +76,13 @@ fn count_decisions_py(node: Node) -> u32 {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         match n.kind() {
-            "if_statement" | "elif_clause" | "for_statement" | "while_statement"
-            | "except_clause" | "conditional_expression" | "boolean_operator"
+            "if_statement"
+            | "elif_clause"
+            | "for_statement"
+            | "while_statement"
+            | "except_clause"
+            | "conditional_expression"
+            | "boolean_operator"
             | "case_clause" => {
                 count += 1;
             }
@@ -338,7 +343,8 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                             for child in mn.children(&mut mn_cursor) {
                                 match child.kind() {
                                     "import_prefix" => {
-                                        dots = text(child, src).chars().filter(|&c| c == '.').count();
+                                        dots =
+                                            text(child, src).chars().filter(|&c| c == '.').count();
                                     }
                                     "dotted_name" => {
                                         dotted_module = text(child, src).to_string();
@@ -348,17 +354,23 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                             }
                             if !dotted_module.is_empty() {
                                 // from .sib import y -> resolve against file
-                                if let Some(key) = resolve_relative_py(file, dots, &dotted_module, None) {
+                                if let Some(key) =
+                                    resolve_relative_py(file, dots, &dotted_module, None)
+                                {
                                     import_keys.push(key);
                                 }
                             } else {
                                 // from . import sub -> one key per imported name
                                 // The name: children of import_from_statement are dotted_names
                                 let mut stmt_cursor = stmt.walk();
-                                for name_node in stmt.children_by_field_name("name", &mut stmt_cursor) {
+                                for name_node in
+                                    stmt.children_by_field_name("name", &mut stmt_cursor)
+                                {
                                     // Each name is a dotted_name; grab its first identifier
                                     let imported_name = text(name_node, src);
-                                    if let Some(key) = resolve_relative_py(file, dots, "", Some(imported_name)) {
+                                    if let Some(key) =
+                                        resolve_relative_py(file, dots, "", Some(imported_name))
+                                    {
                                         import_keys.push(key);
                                     }
                                 }
@@ -402,11 +414,15 @@ mod tests {
     use super::*;
     use stratify_core::SymbolKind;
 
-
     #[test]
     fn file_is_entrypoint() {
         let g = extract("m.py", "def a():\n    pass\n");
-        let file = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        let file = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
         assert_eq!(g.entrypoints(), &[file]);
     }
 
@@ -414,13 +430,24 @@ mod tests {
     fn intra_file_and_top_level_calls() {
         let src = "def a():\n    b()\n\ndef b():\n    pass\n\na()\n";
         let g = extract("x.py", src);
-        let file = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        let file = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
         let a = g.symbols().iter().find(|s| s.name == "a").unwrap().id;
         let b = g.symbols().iter().find(|s| s.name == "b").unwrap().id;
         // a calls b
-        assert!(g.references().iter().any(|r| matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
         // file (top-level) calls a
-        assert!(g.references().iter().any(|r| matches!(r.kind, RefKind::Calls) && r.from == file && r.to == a));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Calls) && r.from == file && r.to == a));
     }
 
     #[test]
@@ -436,7 +463,11 @@ mod tests {
     fn extracts_class_function_method() {
         let src = "class Foo:\n    def bar(self):\n        pass\n\ndef baz():\n    pass\n";
         let g = extract("foo.py", src);
-        let names: Vec<_> = g.symbols().iter().map(|s| (s.kind, s.name.as_str())).collect();
+        let names: Vec<_> = g
+            .symbols()
+            .iter()
+            .map(|s| (s.kind, s.name.as_str()))
+            .collect();
         assert!(names.contains(&(SymbolKind::File, "foo.py")));
         assert!(names.contains(&(SymbolKind::Class, "Foo")));
         assert!(names.contains(&(SymbolKind::Function, "bar")));
@@ -446,7 +477,11 @@ mod tests {
     #[test]
     fn file_fqn_strips_extension() {
         let g = extract("pkg/mod.py", "def x():\n    pass\n");
-        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        let f = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap();
         assert_eq!(f.fqn, "pkg/mod");
     }
 
@@ -454,8 +489,8 @@ mod tests {
     fn emits_normalized_tokens() {
         let g = extract("a.py", "x = 5\n");
         let norms: Vec<&str> = g.tokens().iter().map(|t| t.norm.as_str()).collect();
-        assert!(norms.contains(&"ID"));   // x
-        assert!(norms.contains(&"NUM"));  // 5
+        assert!(norms.contains(&"ID")); // x
+        assert!(norms.contains(&"NUM")); // 5
         assert!(norms.contains(&"="));
     }
 
@@ -463,8 +498,12 @@ mod tests {
     fn absolute_import_keys() {
         // import a.b  -> key a/b ; from c.d import x -> key c/d
         let g = extract("m.py", "import a.b\nfrom c.d import x\n");
-        let deps: Vec<&str> = g.symbols().iter()
-            .filter(|s| s.kind == SymbolKind::Dependency).map(|s| s.name.as_str()).collect();
+        let deps: Vec<&str> = g
+            .symbols()
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Dependency)
+            .map(|s| s.name.as_str())
+            .collect();
         assert!(deps.contains(&"a/b"), "deps: {deps:?}");
         assert!(deps.contains(&"c/d"), "deps: {deps:?}");
     }
@@ -474,8 +513,20 @@ mod tests {
         // pkg/a.py: from b import x -> key "b"; pkg/b.py fqn (when scanned at pkg/) -> "b"
         let importer = extract("a.py", "from b import x\n");
         let imported = extract("b.py", "def z():\n    pass\n");
-        let key = importer.symbols().iter().find(|s| s.kind == SymbolKind::Dependency).unwrap().name.clone();
-        let fqn = imported.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().fqn.clone();
+        let key = importer
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::Dependency)
+            .unwrap()
+            .name
+            .clone();
+        let fqn = imported
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .fqn
+            .clone();
         assert_eq!(key, fqn);
     }
 
@@ -483,14 +534,26 @@ mod tests {
     fn relative_import_with_module() {
         // from pkg/mod.py: from .sib import y -> key pkg/sib
         let g = extract("pkg/mod.py", "from .sib import y\n");
-        assert!(g.symbols().iter().any(|s| s.kind == SymbolKind::Dependency && s.name == "pkg/sib"),
-            "{:?}", g.symbols().iter().filter(|s| s.kind == SymbolKind::Dependency).map(|s| &s.name).collect::<Vec<_>>());
+        assert!(
+            g.symbols()
+                .iter()
+                .any(|s| s.kind == SymbolKind::Dependency && s.name == "pkg/sib"),
+            "{:?}",
+            g.symbols()
+                .iter()
+                .filter(|s| s.kind == SymbolKind::Dependency)
+                .map(|s| &s.name)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn relative_import_bare_names() {
         // from pkg/mod.py: from . import sub -> key pkg/sub (imported name is a submodule)
         let g = extract("pkg/mod.py", "from . import sub\n");
-        assert!(g.symbols().iter().any(|s| s.kind == SymbolKind::Dependency && s.name == "pkg/sub"));
+        assert!(g
+            .symbols()
+            .iter()
+            .any(|s| s.kind == SymbolKind::Dependency && s.name == "pkg/sub"));
     }
 }
