@@ -70,6 +70,44 @@ fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
     }
 }
 
+/// Count decision points in a subtree for cyclomatic complexity.
+fn count_decisions_py(node: Node) -> u32 {
+    let mut count = 0u32;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "if_statement" | "elif_clause" | "for_statement" | "while_statement"
+            | "except_clause" | "conditional_expression" | "boolean_operator"
+            | "case_clause" => {
+                count += 1;
+            }
+            _ => {}
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    count
+}
+
+fn cyclomatic_py(node: Node) -> u32 {
+    1 + count_decisions_py(node)
+}
+
+/// Find the function that lexically encloses `node` by matching byte ranges against
+/// known Function symbols in this file's graph.
+fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> {
+    let pos = node.start_byte();
+    g.symbols()
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Function) && s.span.file == file)
+        .filter(|s| s.span.start_byte <= pos && pos < s.span.end_byte)
+        // Innermost enclosing function = smallest span.
+        .min_by_key(|s| s.span.end_byte - s.span.start_byte)
+        .map(|s| s.id)
+}
+
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
 
@@ -90,6 +128,9 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
     });
+
+    // The file is always an entrypoint (Python has no exports; top-level code runs on import).
+    g.mark_entrypoint(file_id);
 
     emit_tokens(&mut g, file, src, root);
 
@@ -146,7 +187,67 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 span: span(file, decl_node),
                 confidence: Confidence::Certain,
             });
+            // Set complexity for function definitions.
+            if kind == SymbolKind::Function {
+                g.set_complexity(id, cyclomatic_py(decl_node));
+            }
         }
+    }
+
+    // Second pass: intra-file calls. Build a map of Function name -> SymbolId.
+    let name_to_id: std::collections::HashMap<String, SymbolId> = g
+        .symbols()
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Function))
+        .map(|s| (s.name.clone(), s.id))
+        .collect();
+
+    let call_q = Query::new(
+        &lang,
+        r#"
+        (call function: (identifier) @callee) @call
+        (call function: (attribute attribute: (identifier) @callee)) @call
+        "#,
+    )
+    .expect("py call query");
+
+    let callee_idx = call_q.capture_index_for_name("callee").unwrap();
+    let call_idx = call_q.capture_index_for_name("call").unwrap();
+
+    let mut call_cursor = QueryCursor::new();
+    let mut call_matches = call_cursor.matches(&call_q, root, src.as_bytes());
+    let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
+    while let Some(m) = call_matches.next() {
+        let mut callee_name = None;
+        let mut call_node = None;
+        for cap in m.captures {
+            if cap.index == callee_idx {
+                callee_name = Some(text(cap.node, src).to_string());
+            } else if cap.index == call_idx {
+                call_node = Some(cap.node);
+            }
+        }
+        let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
+            continue;
+        };
+        let Some(&callee_id) = name_to_id.get(&callee_name) else {
+            continue;
+        };
+        let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
+        edges.push((from, callee_id));
+    }
+
+    // Deduplicate and emit Calls edges.
+    edges.sort_unstable();
+    edges.dedup();
+    for (from, to) in edges {
+        g.add_reference(Reference {
+            from,
+            to,
+            kind: RefKind::Calls,
+            span: span(file, root),
+            confidence: Confidence::Likely,
+        });
     }
 
     g
@@ -156,6 +257,35 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
 mod tests {
     use super::*;
     use stratify_core::SymbolKind;
+
+    #[test]
+    fn file_is_entrypoint() {
+        let g = extract("m.py", "def a():\n    pass\n");
+        let file = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        assert_eq!(g.entrypoints(), &[file]);
+    }
+
+    #[test]
+    fn intra_file_and_top_level_calls() {
+        let src = "def a():\n    b()\n\ndef b():\n    pass\n\na()\n";
+        let g = extract("x.py", src);
+        let file = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        let a = g.symbols().iter().find(|s| s.name == "a").unwrap().id;
+        let b = g.symbols().iter().find(|s| s.name == "b").unwrap().id;
+        // a calls b
+        assert!(g.references().iter().any(|r| matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
+        // file (top-level) calls a
+        assert!(g.references().iter().any(|r| matches!(r.kind, RefKind::Calls) && r.from == file && r.to == a));
+    }
+
+    #[test]
+    fn computes_complexity() {
+        // base 1 + if + `and` + for = 4
+        let src = "def m(x):\n    if x > 0 and x < 9:\n        return 1\n    for i in range(3):\n        pass\n    return 0\n";
+        let g = extract("c.py", src);
+        let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
+        assert_eq!(g.complexity_of(m), Some(4));
+    }
 
     #[test]
     fn extracts_class_function_method() {
