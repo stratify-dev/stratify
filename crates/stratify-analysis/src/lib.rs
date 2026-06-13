@@ -1,3 +1,4 @@
+pub mod boundaries;
 pub mod complexity;
 pub mod cycles;
 pub mod imports;
