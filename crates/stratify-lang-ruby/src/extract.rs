@@ -210,14 +210,6 @@ mod tests {
     use stratify_core::SymbolKind;
 
     #[test]
-    fn discover_sexp() {
-        let src = "module Foo\nend\nclass Bar\nend\ndef greet\nend";
-        let mut p = parser();
-        let tree = p.parse(src, None).unwrap();
-        println!("{}", tree.root_node().to_sexp());
-    }
-
-    #[test]
     fn extracts_module_class_method() {
         let src = "module M\n  class Foo\n    def bar\n    end\n  end\nend\n";
         let g = extract("foo.rb", src);
@@ -268,3 +260,4 @@ mod tests {
             matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
     }
 }
+// Temporary review tests - will be removed
