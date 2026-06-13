@@ -4,11 +4,7 @@ use stratify_core::{Confidence, Finding, IrGraph, Severity, SymbolKind};
 /// Hotspot = function complexity x churn of its file. Flags functions whose
 /// score exceeds `threshold`. Churn is supplied by the caller (the CLI reads
 /// it from git), keyed by the same file string the IR uses in spans.
-pub fn analyze(
-    graph: &IrGraph,
-    churn: &HashMap<String, u32>,
-    threshold: u32,
-) -> Vec<Finding> {
+pub fn analyze(graph: &IrGraph, churn: &HashMap<String, u32>, threshold: u32) -> Vec<Finding> {
     let mut findings = Vec::new();
     for s in graph.symbols() {
         if !matches!(s.kind, SymbolKind::Function) {
@@ -47,7 +43,12 @@ mod tests {
             kind: SymbolKind::Function,
             name: name.into(),
             fqn: name.into(),
-            span: Span { file: file.into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: file.into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });
@@ -86,7 +87,12 @@ mod tests {
             kind: SymbolKind::Function,
             name: "x".into(),
             fqn: "x".into(),
-            span: Span { file: "a.rb".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "a.rb".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });

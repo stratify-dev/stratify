@@ -65,7 +65,11 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
         COMPLEXITY_THRESHOLD,
     ));
     let churn = crate::churn::git_churn(root);
-    findings.extend(stratify_analysis::hotspot::analyze(&graph, &churn, HOTSPOT_THRESHOLD));
+    findings.extend(stratify_analysis::hotspot::analyze(
+        &graph,
+        &churn,
+        HOTSPOT_THRESHOLD,
+    ));
     Ok(Report::new(findings))
 }
 
