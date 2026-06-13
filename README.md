@@ -117,3 +117,18 @@ Register it in an MCP client. For Claude Code:
 
 The agent can then call `analyze` with `{ "path": ".", "rule": "dead_code" }`
 to get structured findings without parsing CLI output.
+
+## Editor diagnostics (LSP)
+
+Stratify ships a Language Server so findings appear inline in your editor:
+
+```sh
+stratify lsp
+```
+
+It runs a stdio Language Server. On open and save it analyzes the workspace and
+publishes diagnostics (dead code, duplication, complexity, hotspots, cycles,
+boundary violations), each tagged with its rule as the diagnostic code.
+
+Point your editor's LSP client at the `stratify lsp` command for files in the
+workspace. The server reads the workspace root from the `initialize` request.

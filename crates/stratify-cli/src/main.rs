@@ -1,4 +1,5 @@
 mod churn;
+mod lsp;
 mod mcp;
 mod run;
 
@@ -31,6 +32,8 @@ enum Command {
     },
     /// Run an MCP server over stdio for coding agents.
     Mcp,
+    /// Run a Language Server over stdio for editor diagnostics.
+    Lsp,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -101,6 +104,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Mcp => match mcp::run_stdio() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("stratify: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Lsp => match lsp::run_stdio() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("stratify: {e}");
