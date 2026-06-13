@@ -17,6 +17,7 @@ stratify-analysis = { path = "../stratify-analysis" }
 stratify-report = { path = "../stratify-report" }
 clap = { workspace = true }
 ignore = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
