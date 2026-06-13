@@ -104,6 +104,29 @@ fn cyclomatic_java(node: Node) -> u32 {
     1 + count_decisions_java(node)
 }
 
+fn package_name(root: Node, src: &str) -> String {
+    let q = Query::new(
+        &tree_sitter_java::LANGUAGE.into(),
+        r#"(package_declaration) @pkg"#,
+    )
+    .expect("pkg query");
+    let mut cur = QueryCursor::new();
+    let mut it = cur.matches(&q, root, src.as_bytes());
+    if let Some(m) = it.next() {
+        if let Some(cap) = m.captures.first() {
+            let t = text(cap.node, src);
+            // strip leading "package" and trailing ";"
+            return t
+                .trim_start_matches("package")
+                .trim()
+                .trim_end_matches(';')
+                .trim()
+                .to_string();
+        }
+    }
+    String::new()
+}
+
 /// Extract classes and their methods into a per-file graph. The file itself
 /// becomes a `File` symbol; classes and methods get `Defines` edges from it.
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
@@ -125,6 +148,8 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     });
 
     emit_tokens(&mut g, file, src, root);
+
+    let pkg = package_name(root, src);
 
     let query = Query::new(
         &tree_sitter_java::LANGUAGE.into(),
@@ -162,11 +187,16 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         if let (Some(name_node), Some(decl_node)) = (name_node, decl_node) {
             let name = text(name_node, src).to_string();
             let is_main = kind == SymbolKind::Function && name == "main";
+            let fqn = if matches!(kind, SymbolKind::Class) && !pkg.is_empty() {
+                format!("{pkg}.{name}")
+            } else {
+                name.clone()
+            };
             let id = g.add_symbol(Symbol {
                 id: SymbolId(0),
                 kind,
                 name: name.clone(),
-                fqn: name,
+                fqn,
                 span: span(file, decl_node),
                 visibility: Visibility::Unknown,
                 confidence: Confidence::Certain,
@@ -184,6 +214,39 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             if kind == SymbolKind::Function {
                 let cx = cyclomatic_java(decl_node);
                 g.set_complexity(id, cx);
+            }
+        }
+    }
+
+    // Import pass: emit a Dependency symbol per import and an Imports edge from the file.
+    let import_q = Query::new(
+        &tree_sitter_java::LANGUAGE.into(),
+        r#"(import_declaration (scoped_identifier) @imp)"#,
+    )
+    .expect("import query");
+    let imp_idx = import_q.capture_index_for_name("imp").unwrap();
+    let mut icur = QueryCursor::new();
+    let mut imatches = icur.matches(&import_q, root, src.as_bytes());
+    while let Some(m) = imatches.next() {
+        for cap in m.captures {
+            if cap.index == imp_idx {
+                let fqn = text(cap.node, src).to_string();
+                let dep = g.add_symbol(Symbol {
+                    id: SymbolId(0),
+                    kind: SymbolKind::Dependency,
+                    name: fqn.clone(),
+                    fqn,
+                    span: span(file, cap.node),
+                    visibility: Visibility::Unknown,
+                    confidence: Confidence::Certain,
+                });
+                g.add_reference(Reference {
+                    from: file_id,
+                    to: dep,
+                    kind: RefKind::Imports,
+                    span: span(file, cap.node),
+                    confidence: Confidence::Certain,
+                });
             }
         }
     }
@@ -328,5 +391,26 @@ mod tests {
             .references()
             .iter()
             .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
+    }
+
+    #[test]
+    fn class_fqn_includes_package() {
+        let src = "package com.acme;\nclass Foo {}";
+        let g = extract("Foo.java", src);
+        let foo = g.symbols().iter().find(|s| s.name == "Foo").unwrap();
+        assert_eq!(foo.fqn, "com.acme.Foo");
+    }
+
+    #[test]
+    fn emits_import_dependency_and_edge() {
+        let src = "package com.acme;\nimport com.other.Bar;\nclass Foo {}";
+        let g = extract("Foo.java", src);
+        // a Dependency named after the imported FQN
+        let dep = g.symbols().iter().find(|s| s.kind == SymbolKind::Dependency && s.name == "com.other.Bar");
+        assert!(dep.is_some(), "expected import Dependency for com.other.Bar");
+        let dep_id = dep.unwrap().id;
+        let file_id = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        assert!(g.references().iter().any(|r|
+            matches!(r.kind, RefKind::Imports) && r.from == file_id && r.to == dep_id));
     }
 }
