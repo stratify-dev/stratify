@@ -83,6 +83,64 @@ fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
     }
 }
 
+/// Return true if `node` has an ancestor that is an `export_statement`.
+fn is_exported(node: Node) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.kind() == "export_statement" {
+            return true;
+        }
+        cur = n.parent();
+    }
+    false
+}
+
+/// Count decision points in a subtree for cyclomatic complexity.
+fn count_decisions_ts(node: Node) -> u32 {
+    let mut count = 0u32;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "if_statement"
+            | "for_statement"
+            | "for_in_statement"
+            | "while_statement"
+            | "do_statement"
+            | "switch_case"
+            | "ternary_expression"
+            | "catch_clause"
+            | "&&"
+            | "||"
+            | "??" => {
+                count += 1;
+            }
+            _ => {}
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    count
+}
+
+fn cyclomatic_ts(node: Node) -> u32 {
+    1 + count_decisions_ts(node)
+}
+
+/// Find the method that lexically encloses `node` by matching byte ranges against
+/// known Function symbols in this file's graph.
+fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> {
+    let pos = node.start_byte();
+    g.symbols()
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Function) && s.span.file == file)
+        .filter(|s| s.span.start_byte <= pos && pos < s.span.end_byte)
+        // Innermost enclosing method = smallest span.
+        .min_by_key(|s| s.span.end_byte - s.span.start_byte)
+        .map(|s| s.id)
+}
+
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let lang = lang_for(file);
 
@@ -105,6 +163,9 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
     });
+
+    // The file scope is always an entrypoint (top-level module code runs on import).
+    g.mark_entrypoint(file_id);
 
     emit_tokens(&mut g, file, src, root);
 
@@ -178,7 +239,71 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 span: span(file, decl_node),
                 confidence: Confidence::Certain,
             });
+            // Exported symbols are entrypoints (reachable from other modules).
+            if is_exported(decl_node) {
+                g.mark_entrypoint(id);
+            }
+            // Set complexity for functions.
+            if kind == SymbolKind::Function {
+                g.set_complexity(id, cyclomatic_ts(decl_node));
+            }
         }
+    }
+
+    // Second pass: intra-file calls. Build a map of Function name -> SymbolId.
+    let name_to_id: std::collections::HashMap<String, SymbolId> = g
+        .symbols()
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Function))
+        .map(|s| (s.name.clone(), s.id))
+        .collect();
+
+    let call_q = Query::new(
+        &lang,
+        r#"
+        (call_expression function: (identifier) @callee) @call
+        (call_expression function: (member_expression property: (property_identifier) @callee)) @call
+        "#,
+    )
+    .expect("ts call query");
+
+    let callee_idx = call_q.capture_index_for_name("callee").unwrap();
+    let call_idx = call_q.capture_index_for_name("call").unwrap();
+
+    let mut call_cursor = QueryCursor::new();
+    let mut call_matches = call_cursor.matches(&call_q, root, src.as_bytes());
+    let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
+    while let Some(m) = call_matches.next() {
+        let mut callee_name = None;
+        let mut call_node = None;
+        for cap in m.captures {
+            if cap.index == callee_idx {
+                callee_name = Some(text(cap.node, src).to_string());
+            } else if cap.index == call_idx {
+                call_node = Some(cap.node);
+            }
+        }
+        let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
+            continue;
+        };
+        let Some(&callee_id) = name_to_id.get(&callee_name) else {
+            continue;
+        };
+        let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
+        edges.push((from, callee_id));
+    }
+
+    // Deduplicate and emit Calls edges.
+    edges.sort_unstable();
+    edges.dedup();
+    for (from, to) in edges {
+        g.add_reference(Reference {
+            from,
+            to,
+            kind: RefKind::Calls,
+            span: span(file, root),
+            confidence: Confidence::Likely,
+        });
     }
 
     g
@@ -230,5 +355,36 @@ mod tests {
     fn tsx_parses() {
         let g = extract("c.tsx", "function C() { return null; }");
         assert!(g.symbols().iter().any(|s| s.name == "C"));
+    }
+
+    #[test]
+    fn file_and_exports_are_entrypoints() {
+        // File scope is always an entrypoint; an exported function is too.
+        let src = "export function api() {}\nfunction helper() {}\n";
+        let g = extract("m.ts", src);
+        let file = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        let api = g.symbols().iter().find(|s| s.name == "api").unwrap().id;
+        let eps = g.entrypoints();
+        assert!(eps.contains(&file));
+        assert!(eps.contains(&api), "exported function should be an entrypoint");
+    }
+
+    #[test]
+    fn intra_file_call_edge() {
+        let src = "function a() { b(); }\nfunction b() {}\na();\n";
+        let g = extract("x.ts", src);
+        let a = g.symbols().iter().find(|s| s.name == "a").unwrap().id;
+        let b = g.symbols().iter().find(|s| s.name == "b").unwrap().id;
+        assert!(g.references().iter().any(|r|
+            matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
+    }
+
+    #[test]
+    fn computes_complexity() {
+        // base 1 + if + && + for = 4
+        let src = "function m(x: number) { if (x > 0 && x < 9) {} for (;;) {} }";
+        let g = extract("c.ts", src);
+        let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
+        assert_eq!(g.complexity_of(m), Some(4));
     }
 }
