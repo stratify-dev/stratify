@@ -64,7 +64,10 @@ impl IrGraph {
     }
 
     pub fn complexity_of(&self, id: SymbolId) -> Option<u32> {
-        self.complexity.iter().find(|(i, _)| *i == id).map(|(_, v)| *v)
+        self.complexity
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, v)| *v)
     }
 
     pub fn complexities(&self) -> &[(SymbolId, u32)] {

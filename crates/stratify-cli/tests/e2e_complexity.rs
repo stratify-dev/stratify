@@ -11,6 +11,9 @@ fn sample_complex_reports_high_complexity() {
         .output()
         .expect("run stratify binary");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"rule\": \"complexity\""), "stdout: {stdout}");
+    assert!(
+        stdout.contains("\"rule\": \"complexity\""),
+        "stdout: {stdout}"
+    );
     assert!(stdout.contains("classify"), "stdout: {stdout}");
 }

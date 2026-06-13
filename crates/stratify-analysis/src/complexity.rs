@@ -44,7 +44,12 @@ mod tests {
             kind: SymbolKind::Function,
             name: name.into(),
             fqn: name.into(),
-            span: Span { file: "T.rb".into(), start_byte: 0, end_byte: 1, start_line: 1 },
+            span: Span {
+                file: "T.rb".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });
@@ -69,8 +74,14 @@ mod tests {
         func(&mut g, "high", 15); // > 10 but < 20 -> Info
         func(&mut g, "extreme", 25); // >= 20 -> Warning
         let findings = analyze(&g, 10);
-        let high = findings.iter().find(|f| f.message.contains("high")).unwrap();
-        let extreme = findings.iter().find(|f| f.message.contains("extreme")).unwrap();
+        let high = findings
+            .iter()
+            .find(|f| f.message.contains("high"))
+            .unwrap();
+        let extreme = findings
+            .iter()
+            .find(|f| f.message.contains("extreme"))
+            .unwrap();
         assert_eq!(high.severity, Severity::Info);
         assert_eq!(extreme.severity, Severity::Warning);
     }

@@ -75,9 +75,9 @@ fn count_decisions_ruby(node: Node) -> u32 {
     while let Some(n) = stack.pop() {
         if n.is_named() {
             match n.kind() {
-                "if" | "elsif" | "unless" | "while" | "until" | "for" | "when"
-                | "rescue" | "conditional" | "if_modifier" | "unless_modifier"
-                | "while_modifier" | "until_modifier" => {
+                "if" | "elsif" | "unless" | "while" | "until" | "for" | "when" | "rescue"
+                | "conditional" | "if_modifier" | "unless_modifier" | "while_modifier"
+                | "until_modifier" => {
                     count += 1;
                 }
                 _ => {}

@@ -78,9 +78,16 @@ fn count_decisions_java(node: Node) -> u32 {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         match n.kind() {
-            "if_statement" | "while_statement" | "for_statement"
-            | "enhanced_for_statement" | "do_statement" | "catch_clause"
-            | "switch_label" | "ternary_expression" | "&&" | "||" => {
+            "if_statement"
+            | "while_statement"
+            | "for_statement"
+            | "enhanced_for_statement"
+            | "do_statement"
+            | "catch_clause"
+            | "switch_label"
+            | "ternary_expression"
+            | "&&"
+            | "||" => {
                 count += 1;
             }
             _ => {}

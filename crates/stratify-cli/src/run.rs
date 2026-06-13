@@ -57,7 +57,10 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
 
     let mut findings = deadcode::analyze(&graph);
     findings.extend(duplication::analyze(&graph, DUP_MIN_TOKENS));
-    findings.extend(stratify_analysis::complexity::analyze(&graph, COMPLEXITY_THRESHOLD));
+    findings.extend(stratify_analysis::complexity::analyze(
+        &graph,
+        COMPLEXITY_THRESHOLD,
+    ));
     Ok(Report::new(findings))
 }
 
