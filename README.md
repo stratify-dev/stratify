@@ -93,3 +93,27 @@ The Stratify action installs the `stratify` binary and runs the gate; the
 follow-up step reuses the installed binary to write a SARIF file for upload.
 Set `fail-on: never` on the action step if you want findings to appear in code
 scanning without failing the build.
+
+## MCP server
+
+Stratify speaks the Model Context Protocol so coding agents can query findings:
+
+```sh
+stratify mcp
+```
+
+It runs a stdio JSON-RPC server exposing one tool, `analyze`, which takes a
+`path` (and an optional `rule` filter) and returns the findings as JSON.
+
+Register it in an MCP client. For Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "stratify": { "command": "stratify", "args": ["mcp"] }
+  }
+}
+```
+
+The agent can then call `analyze` with `{ "path": ".", "rule": "dead_code" }`
+to get structured findings without parsing CLI output.
