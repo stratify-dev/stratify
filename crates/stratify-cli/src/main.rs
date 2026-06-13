@@ -1,3 +1,4 @@
+mod churn;
 mod run;
 
 use clap::{Parser, Subcommand, ValueEnum};
