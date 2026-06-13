@@ -546,6 +546,7 @@ dependencies = [
  "stratify-lang",
  "stratify-lang-java",
  "stratify-lang-ruby",
+ "stratify-lang-ts",
  "stratify-report",
  "toml",
 ]

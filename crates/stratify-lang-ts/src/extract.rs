@@ -101,17 +101,9 @@ fn count_decisions_ts(node: Node) -> u32 {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         match n.kind() {
-            "if_statement"
-            | "for_statement"
-            | "for_in_statement"
-            | "while_statement"
-            | "do_statement"
-            | "switch_case"
-            | "ternary_expression"
-            | "catch_clause"
-            | "&&"
-            | "||"
-            | "??" => {
+            "if_statement" | "for_statement" | "for_in_statement" | "while_statement"
+            | "do_statement" | "switch_case" | "ternary_expression" | "catch_clause" | "&&"
+            | "||" | "??" => {
                 count += 1;
             }
             _ => {}
@@ -176,9 +168,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let lang = lang_for(file);
 
     let mut parser = Parser::new();
-    parser
-        .set_language(&lang)
-        .expect("load typescript grammar");
+    parser.set_language(&lang).expect("load typescript grammar");
     let tree = parser.parse(src, None).expect("parse typescript");
     let root = tree.root_node();
 
@@ -386,8 +376,7 @@ mod tests {
 
     #[test]
     fn extracts_class_function_method_arrow() {
-        let src =
-            "export class Foo {\n  bar() {}\n}\nfunction baz() {}\nconst qux = () => {};\n";
+        let src = "export class Foo {\n  bar() {}\n}\nfunction baz() {}\nconst qux = () => {};\n";
         let g = extract("Foo.ts", src);
         let names: Vec<_> = g
             .symbols()
@@ -432,11 +421,19 @@ mod tests {
         // File scope is always an entrypoint; an exported function is too.
         let src = "export function api() {}\nfunction helper() {}\n";
         let g = extract("m.ts", src);
-        let file = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        let file = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
         let api = g.symbols().iter().find(|s| s.name == "api").unwrap().id;
         let eps = g.entrypoints();
         assert!(eps.contains(&file));
-        assert!(eps.contains(&api), "exported function should be an entrypoint");
+        assert!(
+            eps.contains(&api),
+            "exported function should be an entrypoint"
+        );
     }
 
     #[test]
@@ -445,8 +442,10 @@ mod tests {
         let g = extract("x.ts", src);
         let a = g.symbols().iter().find(|s| s.name == "a").unwrap().id;
         let b = g.symbols().iter().find(|s| s.name == "b").unwrap().id;
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
     }
 
     #[test]
@@ -482,9 +481,12 @@ mod tests {
             .find(|s| s.kind == SymbolKind::File)
             .unwrap()
             .id;
-        assert!(g.references().iter().any(|r| matches!(r.kind, RefKind::Imports)
-            && r.from == file_id
-            && r.to == dep.unwrap().id));
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Imports)
+                && r.from == file_id
+                && r.to == dep.unwrap().id));
     }
 
     #[test]
