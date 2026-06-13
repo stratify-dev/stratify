@@ -25,6 +25,11 @@ pub fn analyze(graph: &IrGraph, min_tokens: usize) -> Vec<Finding> {
     // Group identical k-token windows by their exact content.
     let mut groups: HashMap<&[u32], Vec<usize>> = HashMap::new();
     for s in 0..=(n - k) {
+        // Skip windows that straddle a file boundary. Per-file tokens are
+        // contiguous in the stream, so checking the endpoints is sufficient.
+        if tokens[s].file != tokens[s + k - 1].file {
+            continue;
+        }
         groups.entry(&ids[s..s + k]).or_default().push(s);
     }
 
@@ -115,5 +120,16 @@ mod tests {
         // window of 5 over a 3-token block per file: each file alone is < k,
         // and the two files' tokens are not adjacent in a single 5-run, so no finding.
         assert!(analyze(&g, 5).is_empty());
+    }
+
+    #[test]
+    fn straddling_window_is_not_a_clone() {
+        // a.rb + b.rb tokens concatenated happen to equal c.rb's content,
+        // but that is a boundary artifact, not a real clone. Must report nothing.
+        let mut g = IrGraph::new();
+        push(&mut g, "a.rb", &["ID", "=", "NUM"], 1);   // 3 tokens
+        push(&mut g, "b.rb", &["+", "ID"], 1);          // 2 tokens
+        push(&mut g, "c.rb", &["ID", "=", "NUM", "+", "ID"], 1); // 5 tokens, single file
+        assert!(analyze(&g, 5).is_empty(), "boundary straddle must not be a clone");
     }
 }
