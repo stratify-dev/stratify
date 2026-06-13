@@ -64,6 +64,18 @@ pub struct Reference {
     pub confidence: Confidence,
 }
 
+/// A normalized source token used for duplication detection. `norm` is the
+/// normalized class: "ID" for identifiers, "NUM" for numbers, "STR" for
+/// strings, and the literal text for keywords/operators/punctuation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Token {
+    pub file: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub start_line: usize,
+    pub norm: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,5 +1,7 @@
 use stratify_core::ir::{Span, SymbolId};
-use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
+use stratify_core::{
+    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
+};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
@@ -23,6 +25,53 @@ fn text<'a>(node: Node, src: &'a str) -> &'a str {
     node.utf8_text(src.as_bytes()).unwrap_or("")
 }
 
+fn normalize_java(kind: &str, text: &str) -> String {
+    match kind {
+        "identifier" | "type_identifier" => "ID".to_string(),
+        "decimal_integer_literal"
+        | "hex_integer_literal"
+        | "octal_integer_literal"
+        | "binary_integer_literal"
+        | "decimal_floating_point_literal"
+        | "hex_floating_point_literal" => "NUM".to_string(),
+        "string_literal" | "character_literal" => "STR".to_string(),
+        _ => text.to_string(),
+    }
+}
+
+fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
+    if node.child_count() == 0 {
+        out.push(node);
+        return;
+    }
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        collect_leaves(child, out);
+    }
+}
+
+fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
+    let mut leaves: Vec<Node> = Vec::new();
+    collect_leaves(root, &mut leaves);
+    for leaf in leaves {
+        if leaf.start_byte() >= leaf.end_byte() {
+            continue;
+        }
+        let text = text(leaf, src);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let norm = normalize_java(leaf.kind(), text);
+        g.add_token(Token {
+            file: file.to_string(),
+            start_byte: leaf.start_byte(),
+            end_byte: leaf.end_byte(),
+            start_line: leaf.start_position().row + 1,
+            norm,
+        });
+    }
+}
+
 /// Extract classes and their methods into a per-file graph. The file itself
 /// becomes a `File` symbol; classes and methods get `Defines` edges from it.
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
@@ -42,6 +91,8 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
     });
+
+    emit_tokens(&mut g, file, src, root);
 
     let query = Query::new(
         &tree_sitter_java::LANGUAGE.into(),
@@ -173,6 +224,18 @@ fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> 
 mod tests {
     use super::*;
     use stratify_core::SymbolKind;
+
+    #[test]
+    fn emits_normalized_tokens() {
+        let src = "class A { int x = 5; }";
+        let g = extract("A.java", src);
+        let norms: Vec<&str> = g.tokens().iter().map(|t| t.norm.as_str()).collect();
+        // identifiers normalized to ID, the literal 5 to NUM, keywords/punct literal.
+        assert!(norms.contains(&"class"));
+        assert!(norms.contains(&"ID")); // A / int-name / x
+        assert!(norms.contains(&"NUM")); // 5
+        assert!(norms.contains(&"{"));
+    }
 
     #[test]
     fn extracts_class_and_method() {

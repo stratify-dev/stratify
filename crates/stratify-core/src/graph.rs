@@ -1,4 +1,4 @@
-use crate::ir::{Reference, Symbol, SymbolId};
+use crate::ir::{Reference, Symbol, SymbolId, Token};
 
 /// The whole repository as one language-agnostic graph.
 #[derive(Debug, Default, Clone)]
@@ -6,6 +6,7 @@ pub struct IrGraph {
     symbols: Vec<Symbol>,
     references: Vec<Reference>,
     entrypoints: Vec<SymbolId>,
+    tokens: Vec<Token>,
 }
 
 impl IrGraph {
@@ -48,6 +49,14 @@ impl IrGraph {
         &self.entrypoints
     }
 
+    pub fn add_token(&mut self, token: Token) {
+        self.tokens.push(token);
+    }
+
+    pub fn tokens(&self) -> &[Token] {
+        &self.tokens
+    }
+
     /// Merge another graph into this one, remapping the other graph's ids so
     /// they stay unique. Returns nothing; used to combine per-file graphs.
     pub fn merge(&mut self, other: IrGraph) {
@@ -64,6 +73,7 @@ impl IrGraph {
         for e in other.entrypoints {
             self.entrypoints.push(SymbolId(e.0 + offset));
         }
+        self.tokens.extend(other.tokens);
     }
 }
 
@@ -72,6 +82,34 @@ mod tests {
     use super::*;
     use crate::confidence::Confidence;
     use crate::ir::{RefKind, Span, SymbolId, SymbolKind, Visibility};
+
+    fn tok(file: &str, norm: &str) -> crate::ir::Token {
+        crate::ir::Token {
+            file: file.into(),
+            start_byte: 0,
+            end_byte: 1,
+            start_line: 1,
+            norm: norm.into(),
+        }
+    }
+
+    #[test]
+    fn add_and_read_tokens() {
+        let mut g = IrGraph::new();
+        g.add_token(tok("a.rb", "ID"));
+        assert_eq!(g.tokens().len(), 1);
+        assert_eq!(g.tokens()[0].norm, "ID");
+    }
+
+    #[test]
+    fn merge_concatenates_tokens() {
+        let mut g1 = IrGraph::new();
+        g1.add_token(tok("a.rb", "if"));
+        let mut g2 = IrGraph::new();
+        g2.add_token(tok("b.rb", "ID"));
+        g1.merge(g2);
+        assert_eq!(g1.tokens().len(), 2);
+    }
 
     fn sym(name: &str) -> Symbol {
         Symbol {

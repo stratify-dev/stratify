@@ -1,5 +1,7 @@
 use stratify_core::ir::{Span, SymbolId};
-use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
+use stratify_core::{
+    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
+};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
@@ -23,6 +25,50 @@ fn text<'a>(node: Node, src: &'a str) -> &'a str {
     node.utf8_text(src.as_bytes()).unwrap_or("")
 }
 
+fn normalize_ruby(kind: &str, text: &str) -> String {
+    match kind {
+        "identifier" | "constant" | "instance_variable" | "global_variable" | "class_variable" => {
+            "ID".to_string()
+        }
+        "integer" | "float" => "NUM".to_string(),
+        "string_content" | "string" | "simple_symbol" => "STR".to_string(),
+        _ => text.to_string(),
+    }
+}
+
+fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
+    if node.child_count() == 0 {
+        out.push(node);
+        return;
+    }
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        collect_leaves(child, out);
+    }
+}
+
+fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
+    let mut leaves: Vec<Node> = Vec::new();
+    collect_leaves(root, &mut leaves);
+    for leaf in leaves {
+        if leaf.start_byte() >= leaf.end_byte() {
+            continue;
+        }
+        let text = text(leaf, src);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let norm = normalize_ruby(leaf.kind(), text);
+        g.add_token(Token {
+            file: file.to_string(),
+            start_byte: leaf.start_byte(),
+            end_byte: leaf.end_byte(),
+            start_line: leaf.start_position().row + 1,
+            norm,
+        });
+    }
+}
+
 /// Extract modules, classes, and methods into a per-file graph. The file itself
 /// becomes a `File` symbol; all top-level and nested definitions get `Defines` edges from it.
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
@@ -42,6 +88,8 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
     });
+
+    emit_tokens(&mut g, file, src, root);
 
     let query = Query::new(
         &tree_sitter_ruby::LANGUAGE.into(),
@@ -205,6 +253,16 @@ mod tests {
     use stratify_core::SymbolKind;
 
     #[test]
+    fn emits_normalized_tokens() {
+        let src = "def a\n  x = 5\nend\n";
+        let g = extract("a.rb", src);
+        let norms: Vec<&str> = g.tokens().iter().map(|t| t.norm.as_str()).collect();
+        assert!(norms.contains(&"def"));
+        assert!(norms.contains(&"ID")); // a / x
+        assert!(norms.contains(&"NUM")); // 5
+    }
+
+    #[test]
     fn extracts_module_class_method() {
         let src = "module M\n  class Foo\n    def bar\n    end\n  end\nend\n";
         let g = extract("foo.rb", src);
@@ -276,4 +334,3 @@ mod tests {
             .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a_id && r.to == b_id));
     }
 }
-// Temporary review tests - will be removed
