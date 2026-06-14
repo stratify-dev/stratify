@@ -43,11 +43,14 @@ pub fn emit(
     // --- Metrics ---
     let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_http()
-        .with_endpoint(format!("{}/v1/metrics", config.endpoint.trim_end_matches('/')))
+        .with_endpoint(format!(
+            "{}/v1/metrics",
+            config.endpoint.trim_end_matches('/')
+        ))
         .with_headers(header_map(&config.headers))
         .build()?;
-    let reader = opentelemetry_sdk::metrics::PeriodicReaderWithOwnThread::builder(metric_exporter)
-        .build();
+    let reader =
+        opentelemetry_sdk::metrics::PeriodicReaderWithOwnThread::builder(metric_exporter).build();
     let meter_provider = SdkMeterProvider::builder()
         .with_reader(reader)
         .with_resource(resource(config))

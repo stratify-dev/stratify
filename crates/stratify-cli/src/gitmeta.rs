@@ -10,7 +10,10 @@ pub fn parse_remote_url(url: &str) -> (Option<String>, Option<String>) {
     let tail = if let Some((_, rest)) = url.split_once('@') {
         // git@github.com:org/repo.git -> github.com:org/repo.git -> org/repo.git
         rest.split_once(':').map(|(_, p)| p).unwrap_or(rest)
-    } else if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
+    } else if let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    {
         // github.com/org/repo.git -> drop the host segment
         rest.split_once('/').map(|(_, p)| p).unwrap_or(rest)
     } else {
@@ -27,7 +30,12 @@ pub fn parse_remote_url(url: &str) -> (Option<String>, Option<String>) {
 /// that git cannot supply is None. Never panics.
 pub fn git_meta(root: &Path) -> GitMeta {
     let run = |args: &[&str]| -> Option<String> {
-        let out = Command::new("git").arg("-C").arg(root).args(args).output().ok()?;
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .ok()?;
         if !out.status.success() {
             return None;
         }
@@ -82,7 +90,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let git = |args: &[&str]| {
-            assert!(Command::new("git").arg("-C").arg(&dir).args(args).status().unwrap().success());
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
         };
         git(&["init", "-q"]);
         git(&["config", "user.email", "t@example.com"]);

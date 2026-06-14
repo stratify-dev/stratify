@@ -88,7 +88,10 @@ pub fn report_to_metrics(
         value,
         attributes: vec![],
     };
-    out.push(scalar("stratify.cycles", *by_rule.get("cycle").unwrap_or(&0) as f64));
+    out.push(scalar(
+        "stratify.cycles",
+        *by_rule.get("cycle").unwrap_or(&0) as f64,
+    ));
     out.push(scalar(
         "stratify.boundary_violations",
         *by_rule.get("boundary").unwrap_or(&0) as f64,
@@ -152,11 +155,12 @@ pub fn report_to_event(
         AttrValue::Int(report.findings.len() as i64),
     ));
 
-    let count_sev = |s: Severity| {
-        report.findings.iter().filter(|f| f.severity == s).count() as i64
-    };
+    let count_sev = |s: Severity| report.findings.iter().filter(|f| f.severity == s).count() as i64;
     attrs.push(("info".into(), AttrValue::Int(count_sev(Severity::Info))));
-    attrs.push(("warning".into(), AttrValue::Int(count_sev(Severity::Warning))));
+    attrs.push((
+        "warning".into(),
+        AttrValue::Int(count_sev(Severity::Warning)),
+    ));
     attrs.push(("error".into(), AttrValue::Int(count_sev(Severity::Error))));
 
     let mut by_rule: std::collections::BTreeMap<&str, i64> = std::collections::BTreeMap::new();
@@ -210,7 +214,7 @@ pub fn resolve_service_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stratify_core::{Finding, ir::Span};
+    use stratify_core::{ir::Span, Finding};
 
     fn finding(rule: &str, sev: Severity, file: &str, conf: Confidence) -> Finding {
         Finding {
@@ -245,19 +249,30 @@ mod tests {
 
         let dc = m
             .iter()
-            .find(|p| p.name == "stratify.findings"
-                && p.attributes.contains(&("rule".into(), "dead_code".into())))
+            .find(|p| {
+                p.name == "stratify.findings"
+                    && p.attributes.contains(&("rule".into(), "dead_code".into()))
+            })
             .unwrap();
         assert_eq!(dc.value, 2.0);
         assert!(dc.attributes.contains(&("language".into(), "go".into())));
 
         let cycles = m.iter().find(|p| p.name == "stratify.cycles").unwrap();
         assert_eq!(cycles.value, 1.0);
-        let cmax = m.iter().find(|p| p.name == "stratify.complexity.max").unwrap();
+        let cmax = m
+            .iter()
+            .find(|p| p.name == "stratify.complexity.max")
+            .unwrap();
         assert_eq!(cmax.value, 9.0);
-        let cmean = m.iter().find(|p| p.name == "stratify.complexity.mean").unwrap();
+        let cmean = m
+            .iter()
+            .find(|p| p.name == "stratify.complexity.mean")
+            .unwrap();
         assert_eq!(cmean.value, 4.5);
-        let dur = m.iter().find(|p| p.name == "stratify.scan.duration_ms").unwrap();
+        let dur = m
+            .iter()
+            .find(|p| p.name == "stratify.scan.duration_ms")
+            .unwrap();
         assert_eq!(dur.value, 42.0);
     }
 
@@ -276,7 +291,12 @@ mod tests {
         let ev = report_to_event(&report, &git, "org/repo", 99, &langs);
 
         assert_eq!(ev.body, "stratify.run");
-        let get = |k: &str| ev.attributes.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        let get = |k: &str| {
+            ev.attributes
+                .iter()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.clone())
+        };
         assert_eq!(get("project"), Some(AttrValue::Str("org/repo".into())));
         assert_eq!(get("commit"), Some(AttrValue::Str("abc123".into())));
         assert_eq!(get("branch"), Some(AttrValue::Str("main".into())));
@@ -293,7 +313,11 @@ mod tests {
     #[test]
     fn event_omits_absent_git_fields() {
         let report = Report::new(vec![]);
-        let git = GitMeta { commit: None, branch: None, remote_url: None };
+        let git = GitMeta {
+            commit: None,
+            branch: None,
+            remote_url: None,
+        };
         let ev = report_to_event(&report, &git, "p", 0, &Default::default());
         assert!(ev.attributes.iter().all(|(n, _)| n != "commit"));
         assert!(ev.attributes.iter().all(|(n, _)| n != "branch"));
@@ -303,16 +327,28 @@ mod tests {
     fn parse_headers_splits_pairs() {
         assert_eq!(
             parse_headers("a=1,b=2"),
-            vec![("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())]
+            vec![
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), "2".to_string())
+            ]
         );
         assert!(parse_headers("").is_empty());
-        assert_eq!(parse_headers("only=this,broken"), vec![("only".to_string(), "this".to_string())]);
+        assert_eq!(
+            parse_headers("only=this,broken"),
+            vec![("only".to_string(), "this".to_string())]
+        );
     }
 
     #[test]
     fn service_name_precedence() {
-        assert_eq!(resolve_service_name(Some("flag"), Some("env"), Some("git"), "dir"), "flag");
-        assert_eq!(resolve_service_name(None, Some("env"), Some("git"), "dir"), "env");
+        assert_eq!(
+            resolve_service_name(Some("flag"), Some("env"), Some("git"), "dir"),
+            "flag"
+        );
+        assert_eq!(
+            resolve_service_name(None, Some("env"), Some("git"), "dir"),
+            "env"
+        );
         assert_eq!(resolve_service_name(None, None, Some("git"), "dir"), "git");
         assert_eq!(resolve_service_name(None, None, None, "dir"), "dir");
     }
