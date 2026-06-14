@@ -15,22 +15,31 @@ inputs:
     description: "Minimum finding severity that causes the step to fail. One of: never, info, warning, error."
     default: warning
   format:
-    description: "Output format. One of: human, json."
+    description: "Output format. One of: human, json, sarif."
     default: human
 
 runs:
   using: composite
   steps:
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Install stratify
+    - name: Install stratify (prebuilt, with source fallback)
       shell: bash
       run: |
-        cargo install \
-          --git https://github.com/stratify-dev/stratify \
-          stratify-cli \
-          --locked
+        set -euo pipefail
+        INSTALLER="stratify-cli-installer.sh"
+        URL="https://github.com/stratify-dev/stratify/releases/latest/download/${INSTALLER}"
+        export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+        if curl --proto '=https' --tlsv1.2 -fLsS "$URL" -o /tmp/stratify-installer.sh; then
+          sh /tmp/stratify-installer.sh
+        else
+          echo "Prebuilt installer not available; building from source."
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -fLsS https://sh.rustup.rs | sh -s -- -y
+            echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+            export PATH="$CARGO_HOME/bin:$PATH"
+          fi
+          cargo install --git https://github.com/stratify-dev/stratify stratify-cli --locked
+        fi
+        echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
 
     - name: Run quality gate
       shell: bash

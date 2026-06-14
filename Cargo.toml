@@ -38,3 +38,8 @@ streaming-iterator = "0.1"
 opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["experimental_metrics_periodic_reader_no_runtime"] }
 opentelemetry-otlp = { version = "0.27", default-features = false, features = ["http-proto", "reqwest-blocking-client", "metrics", "logs"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

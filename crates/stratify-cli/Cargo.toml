@@ -3,6 +3,9 @@ name = "stratify-cli"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Stratify: polyglot codebase-intelligence CLI"
+homepage = "https://github.com/stratify-dev/stratify"
 
 [[bin]]
 name = "stratify"
