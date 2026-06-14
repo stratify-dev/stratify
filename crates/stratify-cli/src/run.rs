@@ -70,6 +70,7 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
     }
 
     stratify_analysis::resolve::cross_file_calls(&mut graph);
+    stratify_analysis::resolve::go_imports(&mut graph);
 
     let mut findings = deadcode::analyze(&graph);
     findings.extend(duplication::analyze(&graph, DUP_MIN_TOKENS));

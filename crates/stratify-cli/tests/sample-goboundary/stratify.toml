@@ -1,0 +1,7 @@
+[layers]
+db = ["db/**"]
+handlers = ["handlers/**"]
+
+[[forbid]]
+from = "db"
+to = "handlers"
