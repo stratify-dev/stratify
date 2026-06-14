@@ -15,6 +15,19 @@ fn strip_py_ext(path: &str) -> String {
     path.to_string()
 }
 
+/// The package/module key for a Python file. `pkg/mod.py` -> `pkg/mod`;
+/// a package's `pkg/__init__.py` -> `pkg`; a top-level `__init__.py` -> ``.
+fn py_module_key(path: &str) -> String {
+    let stripped = strip_py_ext(path);
+    if stripped == "__init__" {
+        String::new()
+    } else if let Some(pkg) = stripped.strip_suffix("/__init__") {
+        pkg.to_string()
+    } else {
+        stripped
+    }
+}
+
 fn span(file: &str, node: Node) -> Span {
     Span {
         file: file.to_string(),
@@ -166,12 +179,13 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
 
     let mut g = IrGraph::new();
 
-    // File symbol — fqn is the path with Python extension stripped.
+    // File symbol — fqn collapses __init__.py to its package dir so that
+    // `import pkg` (key "pkg") resolves to pkg/__init__.py (fqn "pkg").
     let file_id = g.add_symbol(Symbol {
         id: SymbolId(0),
         kind: SymbolKind::File,
         name: file.to_string(),
-        fqn: strip_py_ext(file),
+        fqn: py_module_key(file),
         span: span(file, root),
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
@@ -564,6 +578,37 @@ mod tests {
             .symbols()
             .iter()
             .any(|s| s.kind == SymbolKind::Dependency && s.name == "pkg/sub"));
+    }
+
+    #[test]
+    fn init_file_fqn_is_package_dir() {
+        // pkg/__init__.py represents the package `pkg` -> fqn "pkg", so
+        // `import pkg` (key "pkg") resolves to it.
+        let g = extract("pkg/__init__.py", "x = 1\n");
+        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        assert_eq!(f.fqn, "pkg");
+    }
+
+    #[test]
+    fn nested_init_fqn_is_package_path() {
+        let g = extract("a/b/__init__.py", "x = 1\n");
+        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        assert_eq!(f.fqn, "a/b");
+    }
+
+    #[test]
+    fn module_file_fqn_unchanged() {
+        // regular module files keep path-sans-ext (regression guard)
+        let g = extract("pkg/mod.py", "x = 1\n");
+        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        assert_eq!(f.fqn, "pkg/mod");
+    }
+
+    #[test]
+    fn top_level_init_fqn_is_empty() {
+        let g = extract("__init__.py", "x = 1\n");
+        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        assert_eq!(f.fqn, "");
     }
 
     #[test]
