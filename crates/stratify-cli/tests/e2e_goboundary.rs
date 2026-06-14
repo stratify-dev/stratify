@@ -11,7 +11,10 @@ fn go_boundary_violation_is_detected() {
         .output()
         .expect("run stratify binary");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"rule\": \"boundary\""), "stdout: {stdout}");
+    assert!(
+        stdout.contains("\"rule\": \"boundary\""),
+        "stdout: {stdout}"
+    );
     // db importing handlers crosses the forbidden boundary
     assert!(
         stdout.contains("db/store.go") && stdout.contains("handlers/api.go"),

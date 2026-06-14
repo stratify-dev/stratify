@@ -1,14 +1,18 @@
 # Stratify
 
-Stratify is a polyglot codebase-intelligence tool that parses repos into one language-agnostic IR and runs static analyses. Today: dead-code detection for Java. Ruby support and more analyses are planned.
+Stratify is a polyglot codebase-intelligence tool that parses repos into one language-agnostic IR and runs static analyses. It speaks Java, Ruby, TypeScript, Python, and Go through a single binary.
 
 ## Status
 
-Early development (M1 walking skeleton). Working today:
+Working today:
 
-- Java dead-code detection
-- Human and JSON output formats
+- Six analyses: dead code, duplication, complexity, churn hotspots, dependency cycles, layer boundaries
+- Five languages, each with the full analysis set: Java, Ruby, TypeScript, Python, Go
+- Cross-file call resolution and package-aware import resolution (Go packages, Python `__init__.py`)
+- Surfaces: CLI (human + JSON + SARIF), GitHub Action quality gate, MCP server, and an LSP for inline editor diagnostics
 - `--fail-on` exit-code control for CI quality gates
+
+Go support is complete: all six analyses run on Go code, with package-directory import resolution so cycles and layer boundaries see package-level dependencies.
 
 ## Install
 

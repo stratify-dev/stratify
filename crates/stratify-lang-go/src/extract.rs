@@ -321,7 +321,6 @@ mod tests {
     use super::*;
     use stratify_core::{RefKind, SymbolKind};
 
-
     #[test]
     fn extracts_func_method_type() {
         let src = "package main\n\ntype Foo struct{}\n\nfunc (f Foo) Bar() {}\n\nfunc baz() {}\n";
@@ -400,32 +399,59 @@ mod tests {
     #[test]
     fn file_fqn_is_package_dir() {
         let g = extract("internal/svc/a.go", "package svc\n");
-        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        let f = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap();
         assert_eq!(f.fqn, "internal/svc");
     }
 
     #[test]
     fn top_level_file_fqn_is_empty() {
         let g = extract("main.go", "package main\n");
-        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        let f = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap();
         assert_eq!(f.fqn, "");
     }
 
     #[test]
     fn emits_import_dependency_with_raw_path() {
         let g = extract("a/a.go", "package a\nimport \"example.com/m/b\"\n");
-        let dep = g.symbols().iter().find(|s| s.kind == SymbolKind::Dependency && s.name == "example.com/m/b");
-        assert!(dep.is_some(), "expected import Dependency for example.com/m/b");
-        let file_id = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
-        assert!(g.references().iter().any(|r|
-            matches!(r.kind, RefKind::Imports) && r.from == file_id && r.to == dep.unwrap().id));
+        let dep = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::Dependency && s.name == "example.com/m/b");
+        assert!(
+            dep.is_some(),
+            "expected import Dependency for example.com/m/b"
+        );
+        let file_id = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap()
+            .id;
+        assert!(g
+            .references()
+            .iter()
+            .any(|r| matches!(r.kind, RefKind::Imports)
+                && r.from == file_id
+                && r.to == dep.unwrap().id));
     }
 
     #[test]
     fn emits_grouped_imports() {
         let g = extract("a/a.go", "package a\nimport (\n  \"x/y\"\n  \"p/q\"\n)\n");
-        let names: Vec<&str> = g.symbols().iter()
-            .filter(|s| s.kind == SymbolKind::Dependency).map(|s| s.name.as_str()).collect();
+        let names: Vec<&str> = g
+            .symbols()
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Dependency)
+            .map(|s| s.name.as_str())
+            .collect();
         assert!(names.contains(&"x/y"));
         assert!(names.contains(&"p/q"));
     }

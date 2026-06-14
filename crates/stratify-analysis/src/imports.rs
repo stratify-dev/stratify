@@ -66,7 +66,10 @@ pub fn fqn_import_graph(graph: &IrGraph) -> BTreeMap<String, BTreeSet<String>> {
     // export key -> () to validate import targets.
     let mut export: HashMap<&str, ()> = HashMap::new();
     for s in graph.symbols() {
-        if matches!(s.kind, SymbolKind::File | SymbolKind::Class | SymbolKind::Module) {
+        if matches!(
+            s.kind,
+            SymbolKind::File | SymbolKind::Class | SymbolKind::Module
+        ) {
             export.entry(s.fqn.as_str()).or_insert(());
         }
     }
@@ -91,15 +94,15 @@ pub fn fqn_import_graph(graph: &IrGraph) -> BTreeMap<String, BTreeSet<String>> {
         let (Some(from), Some(to)) = (graph.symbol(r.from), graph.symbol(r.to)) else {
             continue;
         };
-        let Some(src_fqn) = file_fqn.get(&from.id).or_else(|| {
-            // the Imports edge `from` is a File symbol; if not, skip
-            None
-        }) else {
+        // The Imports edge `from` is a File symbol; skip if not.
+        let Some(src_fqn) = file_fqn.get(&from.id) else {
             continue;
         };
         let tgt = to.name.as_str();
         if export.contains_key(tgt) && tgt != src_fqn.as_str() {
-            adj.entry(src_fqn.clone()).or_default().insert(tgt.to_string());
+            adj.entry(src_fqn.clone())
+                .or_default()
+                .insert(tgt.to_string());
         }
     }
     adj

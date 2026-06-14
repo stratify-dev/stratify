@@ -215,19 +215,59 @@ mod tests {
         let mut g = IrGraph::new();
         // package "b" exists (b/b.go), file in package "a" imports example.com/m/b
         let a_file = g.add_symbol(Symbol {
-            id: SymbolId(0), kind: SymbolKind::File, name: "a/a.go".into(), fqn: "a".into(),
-            span: Span { file: "a/a.go".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            visibility: Visibility::Unknown, confidence: Confidence::Certain });
+            id: SymbolId(0),
+            kind: SymbolKind::File,
+            name: "a/a.go".into(),
+            fqn: "a".into(),
+            span: Span {
+                file: "a/a.go".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
         g.add_symbol(Symbol {
-            id: SymbolId(0), kind: SymbolKind::File, name: "b/b.go".into(), fqn: "b".into(),
-            span: Span { file: "b/b.go".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            visibility: Visibility::Unknown, confidence: Confidence::Certain });
+            id: SymbolId(0),
+            kind: SymbolKind::File,
+            name: "b/b.go".into(),
+            fqn: "b".into(),
+            span: Span {
+                file: "b/b.go".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
         let dep = g.add_symbol(Symbol {
-            id: SymbolId(0), kind: SymbolKind::Dependency, name: "example.com/m/b".into(), fqn: "example.com/m/b".into(),
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            visibility: Visibility::Unknown, confidence: Confidence::Certain });
-        g.add_reference(Reference { from: a_file, to: dep, kind: RefKind::Imports,
-            span: Span { file: "a/a.go".into(), start_byte: 0, end_byte: 1, start_line: 1 }, confidence: Confidence::Certain });
+            id: SymbolId(0),
+            kind: SymbolKind::Dependency,
+            name: "example.com/m/b".into(),
+            fqn: "example.com/m/b".into(),
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
+        g.add_reference(Reference {
+            from: a_file,
+            to: dep,
+            kind: RefKind::Imports,
+            span: Span {
+                file: "a/a.go".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            confidence: Confidence::Certain,
+        });
         go_imports(&mut g);
         assert_eq!(g.symbol(dep).unwrap().name, "b");
     }
@@ -237,15 +277,45 @@ mod tests {
         use stratify_core::ir::{Reference, Span, Symbol, Visibility};
         let mut g = IrGraph::new();
         let a_file = g.add_symbol(Symbol {
-            id: SymbolId(0), kind: SymbolKind::File, name: "a/a.go".into(), fqn: "a".into(),
-            span: Span { file: "a/a.go".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            visibility: Visibility::Unknown, confidence: Confidence::Certain });
+            id: SymbolId(0),
+            kind: SymbolKind::File,
+            name: "a/a.go".into(),
+            fqn: "a".into(),
+            span: Span {
+                file: "a/a.go".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
         let dep = g.add_symbol(Symbol {
-            id: SymbolId(0), kind: SymbolKind::Dependency, name: "fmt".into(), fqn: "fmt".into(),
-            span: Span { file: "x".into(), start_byte: 0, end_byte: 1, start_line: 1 },
-            visibility: Visibility::Unknown, confidence: Confidence::Certain });
-        g.add_reference(Reference { from: a_file, to: dep, kind: RefKind::Imports,
-            span: Span { file: "a/a.go".into(), start_byte: 0, end_byte: 1, start_line: 1 }, confidence: Confidence::Certain });
+            id: SymbolId(0),
+            kind: SymbolKind::Dependency,
+            name: "fmt".into(),
+            fqn: "fmt".into(),
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
+        g.add_reference(Reference {
+            from: a_file,
+            to: dep,
+            kind: RefKind::Imports,
+            span: Span {
+                file: "a/a.go".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            confidence: Confidence::Certain,
+        });
         go_imports(&mut g);
         assert_eq!(g.symbol(dep).unwrap().name, "fmt"); // no matching package dir -> unchanged
     }
