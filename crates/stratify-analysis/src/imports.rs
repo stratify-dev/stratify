@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use stratify_core::ir::Span;
+use stratify_core::ir::{Span, SymbolId};
 use stratify_core::{IrGraph, RefKind, SymbolKind};
 
 /// Build the file-level import graph: each file maps to the set of files it
@@ -54,6 +54,63 @@ pub fn file_spans(graph: &IrGraph) -> HashMap<String, Span> {
             spans
                 .entry(s.span.file.clone())
                 .or_insert_with(|| s.span.clone());
+        }
+    }
+    spans
+}
+
+/// Like `file_import_graph` but keyed by export-key (fqn) instead of file path.
+/// Files sharing an fqn (e.g. Go package files) collapse into one node. For
+/// languages where fqn is 1:1 with the file, this matches `file_import_graph`.
+pub fn fqn_import_graph(graph: &IrGraph) -> BTreeMap<String, BTreeSet<String>> {
+    // export key -> () to validate import targets.
+    let mut export: HashMap<&str, ()> = HashMap::new();
+    for s in graph.symbols() {
+        if matches!(s.kind, SymbolKind::File | SymbolKind::Class | SymbolKind::Module) {
+            export.entry(s.fqn.as_str()).or_insert(());
+        }
+    }
+    // file id -> owning file's fqn (the source node key).
+    let file_fqn: HashMap<SymbolId, String> = graph
+        .symbols()
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::File))
+        .map(|s| (s.id, s.fqn.clone()))
+        .collect();
+
+    let mut adj: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for s in graph.symbols() {
+        if matches!(s.kind, SymbolKind::File) {
+            adj.entry(s.fqn.clone()).or_default();
+        }
+    }
+    for r in graph.references() {
+        if !matches!(r.kind, RefKind::Imports) {
+            continue;
+        }
+        let (Some(from), Some(to)) = (graph.symbol(r.from), graph.symbol(r.to)) else {
+            continue;
+        };
+        let Some(src_fqn) = file_fqn.get(&from.id).or_else(|| {
+            // the Imports edge `from` is a File symbol; if not, skip
+            None
+        }) else {
+            continue;
+        };
+        let tgt = to.name.as_str();
+        if export.contains_key(tgt) && tgt != src_fqn.as_str() {
+            adj.entry(src_fqn.clone()).or_default().insert(tgt.to_string());
+        }
+    }
+    adj
+}
+
+/// fqn -> a representative File span (first File with that fqn), for findings.
+pub fn fqn_spans(graph: &IrGraph) -> HashMap<String, Span> {
+    let mut spans = HashMap::new();
+    for s in graph.symbols() {
+        if matches!(s.kind, SymbolKind::File) {
+            spans.entry(s.fqn.clone()).or_insert_with(|| s.span.clone());
         }
     }
     spans
