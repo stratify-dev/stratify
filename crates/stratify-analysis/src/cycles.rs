@@ -7,8 +7,8 @@ use stratify_core::{Confidence, Finding, IrGraph, Severity};
 /// Dependency's name (import key) equals some File/Class/Module symbol's fqn
 /// (export key). Cycles are found by DFS back-edge detection.
 pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
-    let adj = crate::imports::file_import_graph(graph);
-    let span_of = crate::imports::file_spans(graph);
+    let adj = crate::imports::fqn_import_graph(graph);
+    let spans = crate::imports::fqn_spans(graph);
 
     // DFS back-edge detection. Colors: 0 = white, 1 = gray (on stack), 2 = black.
     let mut color: HashMap<String, u8> = HashMap::new();
@@ -25,9 +25,17 @@ pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
     // smallest rotation so A->B->A and B->A->B are the same cycle).
     let mut findings = Vec::new();
     for cycle in reported {
-        let file = &cycle[0];
-        let span = span_of.get(file).cloned().unwrap_or(Span {
-            file: file.clone(),
+        let files: Vec<String> = cycle
+            .iter()
+            .map(|fqn| {
+                spans
+                    .get(fqn)
+                    .map(|s| s.file.clone())
+                    .unwrap_or_else(|| fqn.clone())
+            })
+            .collect();
+        let span = spans.get(&cycle[0]).cloned().unwrap_or(Span {
+            file: files[0].clone(),
             start_byte: 0,
             end_byte: 0,
             start_line: 1,
@@ -35,7 +43,7 @@ pub fn analyze(graph: &IrGraph) -> Vec<Finding> {
         findings.push(Finding {
             rule: "cycle".into(),
             severity: Severity::Warning,
-            message: format!("circular dependency: {}", cycle.join(" -> ")),
+            message: format!("circular dependency: {}", files.join(" -> ")),
             span,
             confidence: Confidence::Certain,
         });
