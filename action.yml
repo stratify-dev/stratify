@@ -1,7 +1,5 @@
 name: Stratify Quality Gate
-description: >
-  Run Stratify dead-code and codebase-intelligence checks on a repository.
-  Fails the job when findings reach the configured severity threshold.
+description: "Polyglot code-intelligence gate: dead code, duplication, complexity, cycles, layer boundaries. Fails CI on findings."
 
 branding:
   icon: shield
