@@ -11,6 +11,8 @@ ci = "github"
 installers = ["shell", "homebrew"]
 # A GitHub repo to push Homebrew formulas to
 tap = "stratify-dev/homebrew-tap"
+# Name the Homebrew formula after the binary (not the package `stratify-cli`)
+formula = "stratify"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
