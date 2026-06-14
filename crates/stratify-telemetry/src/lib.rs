@@ -102,6 +102,108 @@ pub fn report_to_metrics(
     out
 }
 
+use std::collections::BTreeSet;
+
+/// Typed attribute value for the per-run event.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrValue {
+    Str(String),
+    Int(i64),
+}
+
+/// Git metadata for the run. Fields are None outside a git repo.
+#[derive(Debug, Clone, Default)]
+pub struct GitMeta {
+    pub commit: Option<String>,
+    pub branch: Option<String>,
+    pub remote_url: Option<String>,
+}
+
+/// One structured log record summarizing a run. Holds the high-cardinality
+/// fields (commit, branch) that must never go on metric attributes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunEvent {
+    pub body: String,
+    pub attributes: Vec<(String, AttrValue)>,
+}
+
+/// Build the per-run event from the report, git metadata, project name,
+/// duration, and the set of languages seen.
+pub fn report_to_event(
+    report: &Report,
+    git: &GitMeta,
+    project: &str,
+    duration_ms: u64,
+    languages: &BTreeSet<String>,
+) -> RunEvent {
+    let mut attrs: Vec<(String, AttrValue)> = Vec::new();
+    attrs.push(("project".into(), AttrValue::Str(project.into())));
+    if let Some(c) = &git.commit {
+        attrs.push(("commit".into(), AttrValue::Str(c.clone())));
+    }
+    if let Some(b) = &git.branch {
+        attrs.push(("branch".into(), AttrValue::Str(b.clone())));
+    }
+    attrs.push((
+        "total_findings".into(),
+        AttrValue::Int(report.findings.len() as i64),
+    ));
+
+    let count_sev = |s: Severity| {
+        report.findings.iter().filter(|f| f.severity == s).count() as i64
+    };
+    attrs.push(("info".into(), AttrValue::Int(count_sev(Severity::Info))));
+    attrs.push(("warning".into(), AttrValue::Int(count_sev(Severity::Warning))));
+    attrs.push(("error".into(), AttrValue::Int(count_sev(Severity::Error))));
+
+    let mut by_rule: std::collections::BTreeMap<&str, i64> = std::collections::BTreeMap::new();
+    for f in &report.findings {
+        *by_rule.entry(f.rule.as_str()).or_insert(0) += 1;
+    }
+    for (rule, n) in by_rule {
+        attrs.push((format!("rule.{rule}"), AttrValue::Int(n)));
+    }
+
+    attrs.push(("duration_ms".into(), AttrValue::Int(duration_ms as i64)));
+    attrs.push((
+        "languages".into(),
+        AttrValue::Str(languages.iter().cloned().collect::<Vec<_>>().join(",")),
+    ));
+
+    RunEvent {
+        body: "stratify.run".into(),
+        attributes: attrs,
+    }
+}
+
+/// Parse `OTEL_EXPORTER_OTLP_HEADERS` (`k1=v1,k2=v2`). Entries without `=` are
+/// skipped. Surrounding whitespace is trimmed.
+pub fn parse_headers(raw: &str) -> Vec<(String, String)> {
+    raw.split(',')
+        .filter_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            let k = k.trim();
+            if k.is_empty() {
+                return None;
+            }
+            Some((k.to_string(), v.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Resolve `service.name`: flag > env > git remote basename > directory name.
+pub fn resolve_service_name(
+    flag: Option<&str>,
+    env: Option<&str>,
+    git_basename: Option<&str>,
+    dir_name: &str,
+) -> String {
+    flag.or(env)
+        .or(git_basename)
+        .unwrap_or(dir_name)
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +256,61 @@ mod tests {
         assert_eq!(cmean.value, 4.5);
         let dur = m.iter().find(|p| p.name == "stratify.scan.duration_ms").unwrap();
         assert_eq!(dur.value, 42.0);
+    }
+
+    #[test]
+    fn event_carries_commit_and_totals() {
+        let report = Report::new(vec![
+            finding("dead_code", Severity::Warning, "a.go", Confidence::Certain),
+            finding("cycle", Severity::Error, "c.rb", Confidence::Likely),
+        ]);
+        let git = GitMeta {
+            commit: Some("abc123".into()),
+            branch: Some("main".into()),
+            remote_url: None,
+        };
+        let langs = ["go".to_string(), "ruby".to_string()].into_iter().collect();
+        let ev = report_to_event(&report, &git, "org/repo", 99, &langs);
+
+        assert_eq!(ev.body, "stratify.run");
+        let get = |k: &str| ev.attributes.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("project"), Some(AttrValue::Str("org/repo".into())));
+        assert_eq!(get("commit"), Some(AttrValue::Str("abc123".into())));
+        assert_eq!(get("branch"), Some(AttrValue::Str("main".into())));
+        assert_eq!(get("total_findings"), Some(AttrValue::Int(2)));
+        assert_eq!(get("warning"), Some(AttrValue::Int(1)));
+        assert_eq!(get("error"), Some(AttrValue::Int(1)));
+        assert_eq!(get("info"), Some(AttrValue::Int(0)));
+        assert_eq!(get("rule.dead_code"), Some(AttrValue::Int(1)));
+        assert_eq!(get("rule.cycle"), Some(AttrValue::Int(1)));
+        assert_eq!(get("duration_ms"), Some(AttrValue::Int(99)));
+        assert_eq!(get("languages"), Some(AttrValue::Str("go,ruby".into())));
+    }
+
+    #[test]
+    fn event_omits_absent_git_fields() {
+        let report = Report::new(vec![]);
+        let git = GitMeta { commit: None, branch: None, remote_url: None };
+        let ev = report_to_event(&report, &git, "p", 0, &Default::default());
+        assert!(ev.attributes.iter().all(|(n, _)| n != "commit"));
+        assert!(ev.attributes.iter().all(|(n, _)| n != "branch"));
+    }
+
+    #[test]
+    fn parse_headers_splits_pairs() {
+        assert_eq!(
+            parse_headers("a=1,b=2"),
+            vec![("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())]
+        );
+        assert!(parse_headers("").is_empty());
+        assert_eq!(parse_headers("only=this,broken"), vec![("only".to_string(), "this".to_string())]);
+    }
+
+    #[test]
+    fn service_name_precedence() {
+        assert_eq!(resolve_service_name(Some("flag"), Some("env"), Some("git"), "dir"), "flag");
+        assert_eq!(resolve_service_name(None, Some("env"), Some("git"), "dir"), "env");
+        assert_eq!(resolve_service_name(None, None, Some("git"), "dir"), "git");
+        assert_eq!(resolve_service_name(None, None, None, "dir"), "dir");
     }
 }
