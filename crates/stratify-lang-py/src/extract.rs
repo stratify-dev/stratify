@@ -585,14 +585,22 @@ mod tests {
         // pkg/__init__.py represents the package `pkg` -> fqn "pkg", so
         // `import pkg` (key "pkg") resolves to it.
         let g = extract("pkg/__init__.py", "x = 1\n");
-        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        let f = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap();
         assert_eq!(f.fqn, "pkg");
     }
 
     #[test]
     fn nested_init_fqn_is_package_path() {
         let g = extract("a/b/__init__.py", "x = 1\n");
-        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        let f = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap();
         assert_eq!(f.fqn, "a/b");
     }
 
@@ -600,14 +608,22 @@ mod tests {
     fn module_file_fqn_unchanged() {
         // regular module files keep path-sans-ext (regression guard)
         let g = extract("pkg/mod.py", "x = 1\n");
-        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        let f = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap();
         assert_eq!(f.fqn, "pkg/mod");
     }
 
     #[test]
     fn top_level_init_fqn_is_empty() {
         let g = extract("__init__.py", "x = 1\n");
-        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        let f = g
+            .symbols()
+            .iter()
+            .find(|s| s.kind == SymbolKind::File)
+            .unwrap();
         assert_eq!(f.fqn, "");
     }
 

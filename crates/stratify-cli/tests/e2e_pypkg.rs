@@ -13,5 +13,8 @@ fn python_package_cycle_through_init_is_detected() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("\"rule\": \"cycle\""), "stdout: {stdout}");
     // the cycle spans the two packages' __init__.py files
-    assert!(stdout.contains("pkg_a") && stdout.contains("pkg_b"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("pkg_a") && stdout.contains("pkg_b"),
+        "stdout: {stdout}"
+    );
 }
