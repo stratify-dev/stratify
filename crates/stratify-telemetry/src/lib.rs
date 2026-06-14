@@ -1,6 +1,9 @@
 //! Pure mapping from a Stratify Report + scan aggregates to OTLP-ready
 //! metric points and a per-run event. No network, no OTel SDK here.
 
+pub mod emit;
+pub use emit::{emit, TelemetryConfig};
+
 use stratify_core::{Confidence, Report, Severity};
 
 /// One gauge data point: a metric name, a value, and low-cardinality attributes.
