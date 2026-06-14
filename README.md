@@ -77,7 +77,21 @@ flowchart LR
 
 ## Install
 
-Stratify builds from source with Cargo. You need a [Rust toolchain](https://rustup.rs).
+**Homebrew** (macOS and Linux):
+
+```sh
+brew install stratify-dev/tap/stratify
+```
+
+**One-line installer** (macOS, Linux):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/stratify-dev/stratify/releases/latest/download/stratify-cli-installer.sh | sh
+```
+
+**Prebuilt binaries:** download a tarball for your platform from the [latest release](https://github.com/stratify-dev/stratify/releases/latest).
+
+**From source** (needs a [Rust toolchain](https://rustup.rs)):
 
 ```sh
 cargo install --git https://github.com/stratify-dev/stratify stratify-cli --locked
@@ -136,13 +150,13 @@ Drop Stratify into any workflow as a gate:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@main
+- uses: stratify-dev/stratify@v0.1.0
   with:
     path: .
     fail-on: warning
 ```
 
-The step fails the job when at least one finding meets or exceeds the `fail-on` threshold. `@main` tracks the latest. Pin to a released tag like `@v1` once releases are published. The first run compiles Stratify from source and takes a few minutes.
+The step fails the job when at least one finding meets or exceeds the `fail-on` threshold. Pin to a released tag for stable runs, for example `@v0.1.0`. `@main` tracks the latest. The Action downloads a prebuilt binary, so it starts in seconds.
 
 ### Action inputs
 
@@ -164,7 +178,7 @@ Upload it to GitHub code scanning:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@main
+- uses: stratify-dev/stratify@v0.1.0
   with:
     fail-on: never
 - run: stratify check . --format sarif > stratify.sarif
