@@ -1,4 +1,5 @@
 mod churn;
+mod gitmeta;
 mod lsp;
 mod mcp;
 mod run;

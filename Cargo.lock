@@ -1193,6 +1193,7 @@ dependencies = [
  "stratify-lang-ruby",
  "stratify-lang-ts",
  "stratify-report",
+ "stratify-telemetry",
  "toml",
 ]
 
