@@ -137,6 +137,42 @@ boundary violations), each tagged with its rule as the diagnostic code.
 Point your editor's LSP client at the `stratify lsp` command for files in the
 workspace. The server reads the workspace root from the `initialize` request.
 
+## Telemetry (OpenTelemetry / Datadog)
+
+`stratify check` can push results to any OpenTelemetry backend over OTLP, so
+many projects roll up into one dashboard. It emits only when an OTLP endpoint
+is configured; otherwise it does nothing.
+
+```sh
+# Standard OTel env vars
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com
+export OTEL_SERVICE_NAME=my-service   # optional; defaults to the git repo name
+stratify check .
+
+# Or via flags (these override the env vars)
+stratify check . --otlp-endpoint https://otlp.example.com --project my-service
+```
+
+It sends gauges (`stratify.findings` by rule/severity/language/confidence,
+`stratify.complexity.max`/`.mean`, `stratify.cycles`,
+`stratify.boundary_violations`, `stratify.duplication.regions`,
+`stratify.files_scanned`, `stratify.functions`, `stratify.scan.duration_ms`)
+and one `stratify.run` log event per run carrying the git commit, branch, and
+finding totals. Each run is tagged with `service.name` (the project), so one
+dashboard templates across your repos.
+
+**Datadog:** point the endpoint at Datadog's OTLP intake and pass the API key
+as a header:
+
+```sh
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.datadoghq.com
+export OTEL_EXPORTER_OTLP_HEADERS=DD-API-KEY=<your-key>
+stratify check .
+```
+
+Telemetry never fails the scan: export errors print a warning to stderr and the
+exit code still follows `--fail-on`.
+
 ## Layer boundaries
 
 Enforce architecture layers in `stratify.toml`:

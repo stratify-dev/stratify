@@ -1,0 +1,11 @@
+[package]
+name = "stratify-telemetry"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+stratify-core = { path = "../stratify-core" }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }

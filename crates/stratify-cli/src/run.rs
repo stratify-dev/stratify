@@ -1,8 +1,9 @@
 use ignore::WalkBuilder;
+use std::collections::BTreeSet;
 use std::path::Path;
 use stratify_analysis::deadcode;
 use stratify_analysis::duplication;
-use stratify_core::{IrGraph, Report, Severity};
+use stratify_core::{IrGraph, Report, Severity, SymbolKind};
 use stratify_lang::LanguageAdapter;
 use stratify_lang_java::JavaAdapter;
 
@@ -22,9 +23,68 @@ pub enum Format {
     Sarif,
 }
 
+/// Repo-wide aggregate metrics computed from the IR, for telemetry.
+#[derive(Debug, Clone)]
+pub struct ScanStats {
+    pub files_scanned: u64,
+    pub functions: u64,
+    pub complexity_max: u32,
+    pub complexity_mean: f64,
+    pub languages: BTreeSet<String>,
+    pub duration_ms: u64,
+}
+
+/// Map a file path to its Stratify language name by extension.
+fn lang_of_file(path: &str) -> Option<&'static str> {
+    let ext = path.rsplit('.').next()?;
+    match ext {
+        "java" => Some("java"),
+        "rb" => Some("ruby"),
+        "ts" | "tsx" | "mts" | "cts" => Some("typescript"),
+        "py" | "pyi" => Some("python"),
+        "go" => Some("go"),
+        _ => None,
+    }
+}
+
+/// Compute repo-wide stats from the merged IR plus the measured wall time.
+pub fn scan_stats(graph: &IrGraph, duration_ms: u64) -> ScanStats {
+    let mut files_scanned = 0u64;
+    let mut functions = 0u64;
+    let mut languages = BTreeSet::new();
+    for s in graph.symbols() {
+        match s.kind {
+            SymbolKind::File => {
+                files_scanned += 1;
+                if let Some(lang) = lang_of_file(&s.span.file) {
+                    languages.insert(lang.to_string());
+                }
+            }
+            SymbolKind::Function => functions += 1,
+            _ => {}
+        }
+    }
+    let complexities: Vec<u32> = graph.complexities().iter().map(|(_, c)| *c).collect();
+    let complexity_max = complexities.iter().copied().max().unwrap_or(0);
+    let complexity_mean = if complexities.is_empty() {
+        0.0
+    } else {
+        complexities.iter().map(|c| *c as f64).sum::<f64>() / complexities.len() as f64
+    };
+    ScanStats {
+        files_scanned,
+        functions,
+        complexity_max,
+        complexity_mean,
+        languages,
+        duration_ms,
+    }
+}
+
 /// Walk `root`, parse every file a registered adapter handles, merge into one
-/// IrGraph, run dead-code, and return the Report.
-pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
+/// IrGraph, run dead-code, and return the Report along with ScanStats.
+pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStats)> {
+    let start = std::time::Instant::now();
     if !root.exists() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -90,7 +150,13 @@ pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
         &graph,
         &boundary_config,
     ));
-    Ok(Report::new(findings))
+    let stats = scan_stats(&graph, start.elapsed().as_millis() as u64);
+    Ok((Report::new(findings), stats))
+}
+
+/// Convenience wrapper for callers that only need the Report (mcp, lsp).
+pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
+    Ok(analyze_repo_with_stats(root)?.0)
 }
 
 fn load_boundary_config(root: &Path) -> stratify_analysis::boundaries::BoundaryConfig {
@@ -189,5 +255,60 @@ mod tests {
     fn gate_empty_report_never_trips() {
         let report = Report::new(vec![]);
         assert!(!gate(&report, Severity::Info));
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use stratify_core::ir::{Span, Symbol, SymbolId, Visibility};
+    use stratify_core::{Confidence, IrGraph, SymbolKind};
+
+    fn sym(g: &mut IrGraph, kind: SymbolKind, file: &str) -> SymbolId {
+        g.add_symbol(Symbol {
+            id: SymbolId(0),
+            kind,
+            name: file.into(),
+            fqn: file.into(),
+            span: Span {
+                file: file.into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        })
+    }
+
+    #[test]
+    fn scan_stats_counts_and_aggregates() {
+        let mut g = IrGraph::new();
+        sym(&mut g, SymbolKind::File, "a.rb");
+        sym(&mut g, SymbolKind::File, "b.go");
+        let f1 = sym(&mut g, SymbolKind::Function, "a.rb");
+        let f2 = sym(&mut g, SymbolKind::Function, "b.go");
+        g.set_complexity(f1, 4);
+        g.set_complexity(f2, 10);
+
+        let stats = scan_stats(&g, 123);
+        assert_eq!(stats.files_scanned, 2);
+        assert_eq!(stats.functions, 2);
+        assert_eq!(stats.complexity_max, 10);
+        assert_eq!(stats.complexity_mean, 7.0);
+        assert_eq!(stats.duration_ms, 123);
+        assert!(stats.languages.contains("ruby"));
+        assert!(stats.languages.contains("go"));
+    }
+
+    #[test]
+    fn scan_stats_empty_graph_is_zero() {
+        let g = IrGraph::new();
+        let stats = scan_stats(&g, 0);
+        assert_eq!(stats.files_scanned, 0);
+        assert_eq!(stats.functions, 0);
+        assert_eq!(stats.complexity_max, 0);
+        assert_eq!(stats.complexity_mean, 0.0);
+        assert!(stats.languages.is_empty());
     }
 }
