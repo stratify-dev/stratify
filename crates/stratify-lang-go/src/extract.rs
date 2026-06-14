@@ -5,6 +5,13 @@ use stratify_core::{
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
+fn package_dir(path: &str) -> String {
+    std::path::Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 fn is_exported_go(name: &str) -> bool {
     name.chars()
         .next()
@@ -115,18 +122,59 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
 
     let mut g = IrGraph::new();
 
-    // File symbol — fqn is the path as-is (no import resolution needed).
+    // File symbol — fqn is the package directory (parent dir of the path).
     let file_id = g.add_symbol(Symbol {
         id: SymbolId(0),
         kind: SymbolKind::File,
         name: file.to_string(),
-        fqn: file.to_string(),
+        fqn: package_dir(file),
         span: span(file, root),
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
     });
 
     emit_tokens(&mut g, file, src, root);
+
+    // Import pass: emit a Dependency symbol per import path and an Imports edge from the file.
+    // The query matches both single imports and grouped imports via import_spec.
+    let import_q = Query::new(
+        &lang,
+        r#"(import_spec path: (interpreted_string_literal) @path)"#,
+    )
+    .expect("go import query");
+    let path_idx = import_q.capture_index_for_name("path").unwrap();
+    let mut imp_cursor = QueryCursor::new();
+    let mut imp_matches = imp_cursor.matches(&import_q, root, src.as_bytes());
+    while let Some(m) = imp_matches.next() {
+        for cap in m.captures {
+            if cap.index != path_idx {
+                continue;
+            }
+            let raw = text(cap.node, src);
+            // Strip surrounding double-quotes (or backticks for raw string imports).
+            let import_path = raw
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .or_else(|| raw.strip_prefix('`').and_then(|s| s.strip_suffix('`')))
+                .unwrap_or(raw);
+            let dep_id = g.add_symbol(Symbol {
+                id: SymbolId(0),
+                kind: SymbolKind::Dependency,
+                name: import_path.to_string(),
+                fqn: import_path.to_string(),
+                span: span(file, cap.node),
+                visibility: Visibility::Unknown,
+                confidence: Confidence::Certain,
+            });
+            g.add_reference(Reference {
+                from: file_id,
+                to: dep_id,
+                kind: RefKind::Imports,
+                span: span(file, cap.node),
+                confidence: Confidence::Certain,
+            });
+        }
+    }
 
     let query = Query::new(
         &lang,
@@ -273,6 +321,7 @@ mod tests {
     use super::*;
     use stratify_core::{RefKind, SymbolKind};
 
+
     #[test]
     fn extracts_func_method_type() {
         let src = "package main\n\ntype Foo struct{}\n\nfunc (f Foo) Bar() {}\n\nfunc baz() {}\n";
@@ -346,5 +395,38 @@ mod tests {
             "expected unresolved call (m, external); got {:?}",
             g.unresolved_calls()
         );
+    }
+
+    #[test]
+    fn file_fqn_is_package_dir() {
+        let g = extract("internal/svc/a.go", "package svc\n");
+        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        assert_eq!(f.fqn, "internal/svc");
+    }
+
+    #[test]
+    fn top_level_file_fqn_is_empty() {
+        let g = extract("main.go", "package main\n");
+        let f = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap();
+        assert_eq!(f.fqn, "");
+    }
+
+    #[test]
+    fn emits_import_dependency_with_raw_path() {
+        let g = extract("a/a.go", "package a\nimport \"example.com/m/b\"\n");
+        let dep = g.symbols().iter().find(|s| s.kind == SymbolKind::Dependency && s.name == "example.com/m/b");
+        assert!(dep.is_some(), "expected import Dependency for example.com/m/b");
+        let file_id = g.symbols().iter().find(|s| s.kind == SymbolKind::File).unwrap().id;
+        assert!(g.references().iter().any(|r|
+            matches!(r.kind, RefKind::Imports) && r.from == file_id && r.to == dep.unwrap().id));
+    }
+
+    #[test]
+    fn emits_grouped_imports() {
+        let g = extract("a/a.go", "package a\nimport (\n  \"x/y\"\n  \"p/q\"\n)\n");
+        let names: Vec<&str> = g.symbols().iter()
+            .filter(|s| s.kind == SymbolKind::Dependency).map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"x/y"));
+        assert!(names.contains(&"p/q"));
     }
 }
