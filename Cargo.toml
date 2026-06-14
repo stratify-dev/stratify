@@ -10,6 +10,7 @@ members = [
   "crates/stratify-lang-go",
   "crates/stratify-analysis",
   "crates/stratify-report",
+  "crates/stratify-telemetry",
   "crates/stratify-cli",
 ]
 
@@ -34,3 +35,6 @@ clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
 insta = { version = "1", features = ["json"] }
 streaming-iterator = "0.1"
+opentelemetry = "0.27"
+opentelemetry_sdk = "0.27"
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["http-proto", "reqwest-blocking-client", "metrics", "logs"] }
