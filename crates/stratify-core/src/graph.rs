@@ -41,6 +41,13 @@ impl IrGraph {
         self.symbols.get(id.0 as usize)
     }
 
+    /// Rename a symbol (used by post-merge resolution to rewrite an import key).
+    pub fn set_symbol_name(&mut self, id: SymbolId, name: String) {
+        if let Some(s) = self.symbols.get_mut(id.0 as usize) {
+            s.name = name;
+        }
+    }
+
     /// Mark a symbol as an analysis entrypoint (a reachability root).
     /// Adapters decide what is an entrypoint (e.g. Java `main`, Ruby file scope).
     pub fn mark_entrypoint(&mut self, id: SymbolId) {
@@ -238,6 +245,14 @@ mod tests {
             g1.unresolved_calls(),
             &[(SymbolId(1), "target".to_string())]
         );
+    }
+
+    #[test]
+    fn set_symbol_name_renames() {
+        let mut g = IrGraph::new();
+        let a = g.add_symbol(sym("a"));
+        g.set_symbol_name(a, "renamed".into());
+        assert_eq!(g.symbol(a).unwrap().name, "renamed");
     }
 
     #[test]
