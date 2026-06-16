@@ -23,6 +23,7 @@ stratify-analysis = { path = "../stratify-analysis" }
 stratify-report = { path = "../stratify-report" }
 stratify-telemetry = { path = "../stratify-telemetry" }
 clap = { workspace = true }
+globset = { workspace = true }
 ignore = { workspace = true }
 toml = { workspace = true }
 serde_json = { workspace = true }
