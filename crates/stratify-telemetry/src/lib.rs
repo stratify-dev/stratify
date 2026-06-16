@@ -38,6 +38,7 @@ pub fn lang_of(path: &str) -> &'static str {
         Some("ts") | Some("tsx") | Some("mts") | Some("cts") => "typescript",
         Some("py") | Some("pyi") => "python",
         Some("go") => "go",
+        Some("rs") => "rust",
         _ => "unknown",
     }
 }
