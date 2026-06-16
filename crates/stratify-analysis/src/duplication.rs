@@ -43,31 +43,61 @@ pub fn analyze(graph: &IrGraph, min_tokens: usize) -> Vec<Finding> {
         }
     }
 
-    // Emit one finding per left-maximal duplicated region.
+    // Emit one finding per clone cluster, anchored at the earliest occurrence.
     let mut findings = Vec::new();
     for s in 0..duplicated.len() {
         if duplicated[s] && (s == 0 || !duplicated[s - 1]) {
             let group = &groups[&ids[s..s + k]];
-            if let Some(&other) = group.iter().find(|&&o| o != s) {
-                let here = &tokens[s];
-                let there = &tokens[other];
-                let last = &tokens[s + k - 1];
-                findings.push(Finding {
-                    rule: "duplication".into(),
-                    severity: Severity::Warning,
-                    message: format!(
-                        "duplicated code block (>= {k} tokens) also at {}:{}",
-                        there.file, there.start_line
-                    ),
-                    span: Span {
-                        file: here.file.clone(),
-                        start_byte: here.start_byte,
-                        end_byte: last.end_byte,
-                        start_line: here.start_line,
-                    },
-                    confidence: Confidence::Certain,
-                });
+
+            // B2: exclude same-file occurrences that overlap or sit adjacent to
+            // s. Those are repetitive-ladder artifacts, not actionable clones.
+            let valid_others: Vec<usize> = group
+                .iter()
+                .copied()
+                .filter(|&o| {
+                    o != s
+                        && !(tokens[o].file == tokens[s].file
+                            && (o as isize - s as isize).abs() < k as isize)
+                })
+                .collect();
+
+            // No actionable copy remains: drop the finding.
+            if valid_others.is_empty() {
+                continue;
             }
+
+            // B1: a cluster reports exactly once, from its earliest occurrence.
+            if s != *group.iter().min().unwrap() {
+                continue;
+            }
+
+            // Point at the nearest valid other copy.
+            let other = *valid_others
+                .iter()
+                .min_by_key(|&&o| (o as isize - s as isize).unsigned_abs())
+                .unwrap();
+            let here = &tokens[s];
+            let there = &tokens[other];
+            let last = &tokens[s + k - 1];
+            let mut message = format!(
+                "duplicated code block (>= {k} tokens) also at {}:{}",
+                there.file, there.start_line
+            );
+            if valid_others.len() > 1 {
+                message.push_str(&format!(" and {} more", valid_others.len() - 1));
+            }
+            findings.push(Finding {
+                rule: "duplication".into(),
+                severity: Severity::Warning,
+                message,
+                span: Span {
+                    file: here.file.clone(),
+                    start_byte: here.start_byte,
+                    end_byte: last.end_byte,
+                    start_line: here.start_line,
+                },
+                confidence: Confidence::Certain,
+            });
         }
     }
     findings
@@ -122,6 +152,73 @@ mod tests {
         // window of 5 over a 3-token block per file: each file alone is < k,
         // and the two files' tokens are not adjacent in a single 5-run, so no finding.
         assert!(analyze(&g, 5).is_empty());
+    }
+
+    #[test]
+    fn two_file_clone_reports_once() {
+        let mut g = IrGraph::new();
+        let block = ["ID", "=", "ID", "+"];
+        push(&mut g, "a.rb", &block, 10);
+        push(&mut g, "b.rb", &block, 20);
+        let findings = analyze(&g, 4);
+        assert_eq!(findings.len(), 1, "a 2-file clone must report exactly once");
+        // Earliest occurrence is in a.rb; it points at the other file.
+        assert_eq!(findings[0].span.file, "a.rb");
+        assert!(findings[0].message.contains("b.rb"));
+    }
+
+    #[test]
+    fn three_file_clone_reports_once() {
+        let mut g = IrGraph::new();
+        let block = ["ID", "=", "ID", "+"];
+        push(&mut g, "a.rb", &block, 10);
+        push(&mut g, "b.rb", &block, 20);
+        push(&mut g, "c.rb", &block, 30);
+        let findings = analyze(&g, 4);
+        assert_eq!(findings.len(), 1, "a 3-file clone must report exactly once");
+        assert_eq!(findings[0].span.file, "a.rb");
+        assert!(
+            findings[0].message.contains("and 1 more"),
+            "message should note the extra copy: {}",
+            findings[0].message
+        );
+    }
+
+    #[test]
+    fn overlapping_self_match_suppressed() {
+        // Repetitive ladder: a single token repeated so identical 4-token
+        // windows recur only at overlapping offsets (< k) within one file.
+        // With 7 copies the window at 0 also matches at 1,2,3 (all < k), and
+        // no recurrence lands >= k away, so every match is an overlap.
+        let mut g = IrGraph::new();
+        let stream = ["LADDER"; 7];
+        push(&mut g, "x.rb", &stream, 1);
+        let findings = analyze(&g, 4);
+        assert_eq!(
+            findings.len(),
+            0,
+            "overlapping same-file self-matches must be suppressed"
+        );
+    }
+
+    #[test]
+    fn nonoverlapping_in_file_dup_still_reported() {
+        // Same 4-token block twice in one file, separated by >= k unique fillers.
+        let mut g = IrGraph::new();
+        let block = ["ID", "=", "ID", "+"];
+        let filler = ["F1", "F2", "F3", "F4", "F5"];
+        let mut stream: Vec<&str> = Vec::new();
+        stream.extend_from_slice(&block);
+        stream.extend_from_slice(&filler);
+        stream.extend_from_slice(&block);
+        push(&mut g, "a.rb", &stream, 1);
+        let findings = analyze(&g, 4);
+        assert_eq!(
+            findings.len(),
+            1,
+            "non-overlapping in-file duplicate must report once"
+        );
+        assert_eq!(findings[0].span.file, "a.rb");
     }
 
     #[test]
