@@ -19,6 +19,7 @@ stratify-lang-ruby = { path = "../stratify-lang-ruby" }
 stratify-lang-ts = { path = "../stratify-lang-ts" }
 stratify-lang-py = { path = "../stratify-lang-py" }
 stratify-lang-go = { path = "../stratify-lang-go" }
+stratify-lang-rust = { path = "../stratify-lang-rust" }
 stratify-analysis = { path = "../stratify-analysis" }
 stratify-report = { path = "../stratify-report" }
 stratify-telemetry = { path = "../stratify-telemetry" }

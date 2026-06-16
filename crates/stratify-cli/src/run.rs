@@ -43,6 +43,7 @@ fn lang_of_file(path: &str) -> Option<&'static str> {
         "ts" | "tsx" | "mts" | "cts" => Some("typescript"),
         "py" | "pyi" => Some("python"),
         "go" => Some("go"),
+        "rs" => Some("rust"),
         _ => None,
     }
 }
@@ -98,6 +99,7 @@ pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStat
         Box::new(stratify_lang_ts::TsAdapter),
         Box::new(stratify_lang_py::PyAdapter),
         Box::new(stratify_lang_go::GoAdapter),
+        Box::new(stratify_lang_rust::RustAdapter),
     ];
 
     let ignore_globs = load_ignore_globs(root);
