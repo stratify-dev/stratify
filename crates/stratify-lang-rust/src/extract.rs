@@ -82,6 +82,14 @@ fn normalize_rust(kind: &str, text: &str) -> String {
 }
 
 fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
+    // In tree-sitter-rust 0.23 string literals are NOT leaves: they decompose
+    // into quote delimiters + a `string_content` child. Treat them as atomic so
+    // `normalize_rust` collapses the whole literal to a single `STR` token and
+    // the contents never leak into the token stream.
+    if matches!(node.kind(), "string_literal" | "raw_string_literal") {
+        out.push(node);
+        return;
+    }
     if node.child_count() == 0 {
         out.push(node);
         return;
@@ -112,6 +120,23 @@ fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
             norm,
         });
     }
+}
+
+/// True if the nearest `impl_item` enclosing this `function_item` is a *trait*
+/// impl (`impl Trait for Type`). The grammar exposes `impl_item`'s `trait` field
+/// only for trait impls, not for inherent impls (`impl Type`). Methods of a trait
+/// impl are invoked via the trait and get no in-file Calls edge, so they must be
+/// treated as entrypoints to avoid false dead-code reports.
+fn in_trait_impl(node: Node) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        match n.kind() {
+            "impl_item" => return n.child_by_field_name("trait").is_some(),
+            "source_file" => return false,
+            _ => cur = n.parent(),
+        }
+    }
+    false
 }
 
 /// True if the `function_item` node has a `visibility_modifier` child
@@ -234,6 +259,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 if name == "main"
                     || has_visibility(decl_node)
                     || has_test_attribute(decl_node, src)
+                    || in_trait_impl(decl_node)
                 {
                     g.mark_entrypoint(id);
                 }
@@ -379,6 +405,48 @@ fn helper() {}
         assert!(
             !eps.contains(&id("helper")),
             "private uncalled helper is not an entrypoint"
+        );
+    }
+
+    #[test]
+    fn trait_impl_methods_are_entrypoints() {
+        let src = r#"
+trait Greeter { fn hello(&self); }
+struct S;
+impl Greeter for S { fn hello(&self) { let _ = 1; } }
+impl S { fn inherent_unused(&self) {} }
+"#;
+        let g = extract("t.rs", src);
+        let id = |name: &str| {
+            g.symbols()
+                .iter()
+                .find(|s| s.kind == SymbolKind::Function && s.name == name)
+                .unwrap()
+                .id
+        };
+        let eps = g.entrypoints();
+        assert!(
+            eps.contains(&id("hello")),
+            "trait-impl method `hello` must be an entrypoint"
+        );
+        assert!(
+            !eps.contains(&id("inherent_unused")),
+            "inherent-impl method must NOT be an entrypoint"
+        );
+    }
+
+    #[test]
+    fn string_literals_normalize_to_str() {
+        let g = extract("s.rs", r#"fn f() { let a = "hello"; let b = "world"; }"#);
+        let norms: Vec<&str> = g.tokens().iter().map(|t| t.norm.as_str()).collect();
+        assert!(norms.contains(&"STR"), "expected STR tokens for literals");
+        assert!(
+            !norms.iter().any(|n| n.contains("hello")),
+            "raw string content `hello` leaked into tokens: {norms:?}"
+        );
+        assert!(
+            !norms.iter().any(|n| n.contains("world")),
+            "raw string content `world` leaked into tokens: {norms:?}"
         );
     }
 
