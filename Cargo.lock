@@ -1169,7 +1169,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stratify-analysis"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "globset",
  "serde",
@@ -1178,9 +1178,10 @@ dependencies = [
 
 [[package]]
 name = "stratify-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
+ "globset",
  "ignore",
  "insta",
  "serde_json",
@@ -1191,6 +1192,7 @@ dependencies = [
  "stratify-lang-java",
  "stratify-lang-py",
  "stratify-lang-ruby",
+ "stratify-lang-rust",
  "stratify-lang-ts",
  "stratify-report",
  "stratify-telemetry",
@@ -1199,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "stratify-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1207,14 +1209,14 @@ dependencies = [
 
 [[package]]
 name = "stratify-lang"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "stratify-core",
 ]
 
 [[package]]
 name = "stratify-lang-go"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "stratify-core",
  "stratify-lang",
@@ -1225,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "stratify-lang-java"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "stratify-core",
  "stratify-lang",
@@ -1236,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "stratify-lang-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "stratify-core",
  "stratify-lang",
@@ -1247,7 +1249,7 @@ dependencies = [
 
 [[package]]
 name = "stratify-lang-ruby"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "stratify-core",
  "stratify-lang",
@@ -1257,8 +1259,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "stratify-lang-rust"
+version = "0.2.0"
+dependencies = [
+ "stratify-core",
+ "stratify-lang",
+ "streaming-iterator",
+ "tree-sitter",
+ "tree-sitter-rust",
+]
+
+[[package]]
 name = "stratify-lang-ts"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "stratify-core",
  "stratify-lang",
@@ -1269,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "stratify-report"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1278,7 +1291,7 @@ dependencies = [
 
 [[package]]
 name = "stratify-telemetry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -1588,6 +1601,16 @@ name = "tree-sitter-ruby"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be0484ea4ef6bb9c575b4fdabde7e31340a8d2dbc7d52b321ac83da703249f95"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-rust"
+version = "0.23.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca8ccb3e3a3495c8a943f6c3fd24c3804c471fd7f4f16087623c7fa4c0068e8a"
 dependencies = [
  "cc",
  "tree-sitter-language",

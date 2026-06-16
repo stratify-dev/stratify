@@ -43,6 +43,7 @@ fn lang_of_file(path: &str) -> Option<&'static str> {
         "ts" | "tsx" | "mts" | "cts" => Some("typescript"),
         "py" | "pyi" => Some("python"),
         "go" => Some("go"),
+        "rs" => Some("rust"),
         _ => None,
     }
 }
@@ -98,8 +99,10 @@ pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStat
         Box::new(stratify_lang_ts::TsAdapter),
         Box::new(stratify_lang_py::PyAdapter),
         Box::new(stratify_lang_go::GoAdapter),
+        Box::new(stratify_lang_rust::RustAdapter),
     ];
 
+    let ignore_globs = load_ignore_globs(root);
     let mut graph = IrGraph::new();
     for entry in WalkBuilder::new(root).build() {
         let entry = match entry {
@@ -124,6 +127,9 @@ pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStat
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
+        if ignore_globs.is_match(&rel) {
+            continue;
+        }
         if let Ok(file_graph) = adapter.parse_file(&rel, &source) {
             graph.merge(file_graph);
         }
@@ -157,6 +163,18 @@ pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStat
 /// Convenience wrapper for callers that only need the Report (mcp, lsp).
 pub fn analyze_repo(root: &Path) -> std::io::Result<Report> {
     Ok(analyze_repo_with_stats(root)?.0)
+}
+
+/// Load `[ignore] paths` globs from `stratify.toml` at the scan root.
+fn load_ignore_globs(root: &Path) -> globset::GlobSet {
+    match std::fs::read_to_string(root.join("stratify.toml")) {
+        Ok(text) => {
+            let cfg: stratify_analysis::ignore::IgnoreToml =
+                toml::from_str(&text).unwrap_or_default();
+            stratify_analysis::ignore::ignore_globset(&cfg.ignore.paths)
+        }
+        Err(_) => globset::GlobSet::empty(),
+    }
 }
 
 fn load_boundary_config(root: &Path) -> stratify_analysis::boundaries::BoundaryConfig {

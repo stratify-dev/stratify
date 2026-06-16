@@ -1,8 +1,8 @@
 # Stratify
 
-**One binary. Five languages. Six analyses. Findings you can trust.**
+**One binary. Six languages. Six analyses. Findings you can trust.**
 
-Stratify reads your whole repository, builds one language-agnostic model of it, and runs six static analyses on that model. Java, Ruby, TypeScript, Python, and Go all go through the same engine and the same commands. You get the same report shape whether your codebase is a Rails monolith, a Spring service, a Go module, or a mixed-language platform.
+Stratify reads your whole repository, builds one language-agnostic model of it, and runs six static analyses on that model. Java, Ruby, TypeScript, Python, Go, and Rust all go through the same engine and the same commands. You get the same report shape whether your codebase is a Rails monolith, a Spring service, a Go module, a Rust workspace, or a mixed-language platform.
 
 It runs on your laptop, in CI, inside your editor, next to your AI coding agent, and into your dashboards. No servers to run. No accounts to create.
 
@@ -19,7 +19,7 @@ info  App.java:6  possibly unused function `helper`
 
 ## How it flows
 
-Five languages parse into one shared model. The six analyses read only that model, so they work the same everywhere. One stream of findings fans out to every surface.
+Six languages parse into one shared model. The six analyses read only that model, so they work the same everywhere. One stream of findings fans out to every surface.
 
 ```mermaid
 flowchart LR
@@ -30,6 +30,7 @@ flowchart LR
         T["TypeScript"]
         P["Python"]
         G["Go"]
+        RS["Rust"]
     end
 
     TS["tree-sitter<br/>parsers"]
@@ -61,6 +62,7 @@ flowchart LR
     T --> TS
     P --> TS
     G --> TS
+    RS --> TS
     TS --> IR
     IR --> A1 & A2 & A3 & A4 & A5 & A6
     A1 & A2 & A3 & A4 & A5 & A6 --> F
@@ -69,7 +71,7 @@ flowchart LR
 
 ## Why Stratify
 
-**It speaks five languages, not one.** Most code-intelligence tools live in a single ecosystem. Stratify parses every supported language into one shared intermediate representation, so each analysis is written once and works everywhere. Your polyglot repo gets one consistent report.
+**It speaks six languages, not one.** Most code-intelligence tools live in a single ecosystem. Stratify parses every supported language into one shared intermediate representation, so each analysis is written once and works everywhere. Your polyglot repo gets one consistent report.
 
 **It tells you how sure it is.** Every finding carries a confidence level. When Stratify cannot prove a function is dead, it reports `possibly unused` instead of `unused`. It never hides a real finding behind a guess, and it never flags working code as dead just because resolution was hard. You can act on warnings and triage the rest.
 
@@ -119,7 +121,7 @@ stratify check . --fail-on warning
 
 ## The six analyses
 
-Every analysis runs on every supported language in a single pass.
+They all run in a single pass. Java, Ruby, TypeScript, Python, and Go get all six; Rust gets the first four today (see below).
 
 | Analysis | What it finds |
 |----------|---------------|
@@ -132,9 +134,9 @@ Every analysis runs on every supported language in a single pass.
 
 Dead-code detection resolves calls across files, so a function used only from another file shows as `possibly unused` rather than a false `unused`. Cycle and boundary detection understand package-level imports for Go packages and Python `__init__.py`, so they see real dependencies, not just file-to-file edges.
 
-## Five languages, one engine
+## Six languages, one engine
 
-Java, Ruby, TypeScript, Python, and Go each get the full set of six analyses. Adding a language adds one adapter and changes no analysis code, because every analysis reads the shared model, not the source.
+Java, Ruby, TypeScript, Python, and Go each get the full set of six analyses. Rust gets dead code, duplication, complexity, and churn hotspots today. Dependency cycles and layer boundaries for Rust need module/`use` resolution, which is on the roadmap. Adding a language adds one adapter and changes no analysis code, because every analysis reads the shared model, not the source.
 
 ## Output formats
 
@@ -150,13 +152,13 @@ Drop Stratify into any workflow as a gate:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@v0.1.0
+- uses: stratify-dev/stratify@v0.2.0
   with:
     path: .
     fail-on: warning
 ```
 
-The step fails the job when at least one finding meets or exceeds the `fail-on` threshold. Pin to a released tag for stable runs, for example `@v0.1.0`. `@main` tracks the latest. The Action downloads a prebuilt binary, so it starts in seconds.
+The step fails the job when at least one finding meets or exceeds the `fail-on` threshold. Pin to a released tag for stable runs, for example `@v0.2.0`. `@main` tracks the latest. The Action downloads a prebuilt binary, so it starts in seconds.
 
 ### Action inputs
 
@@ -178,7 +180,7 @@ Upload it to GitHub code scanning:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@v0.1.0
+- uses: stratify-dev/stratify@v0.2.0
   with:
     fail-on: never
 - run: stratify check . --format sarif > stratify.sarif
@@ -280,8 +282,8 @@ With no `stratify.toml`, Stratify auto-detects a Rails app (an `app/controllers/
 
 ## Built to extend
 
-The diagram above is the whole architecture. tree-sitter turns source into the Universal IR. The analyses read the IR, never the source, so they stay language-agnostic by construction. Adding a language means writing one adapter that emits the IR. The six analyses come along for free. That is how Stratify went from one language to five without touching analysis code.
+The diagram above is the whole architecture. tree-sitter turns source into the Universal IR. The analyses read the IR, never the source, so they stay language-agnostic by construction. Adding a language means writing one adapter that emits the IR. The analyses come along for free. That is how Stratify went from one language to six without touching analysis code.
 
 ## Status
 
-All six analyses run on all five languages, across every surface: CLI, JSON, SARIF, GitHub Action, MCP, LSP, and OpenTelemetry export. Stratify lives at [github.com/stratify-dev/stratify](https://github.com/stratify-dev/stratify).
+Six analyses across six languages (Rust covers four today, with cycles and boundaries pending import resolution), exposed through every surface: CLI, JSON, SARIF, GitHub Action, MCP, LSP, and OpenTelemetry export. Stratify lives at [github.com/stratify-dev/stratify](https://github.com/stratify-dev/stratify).

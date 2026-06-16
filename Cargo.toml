@@ -8,6 +8,7 @@ members = [
   "crates/stratify-lang-ts",
   "crates/stratify-lang-py",
   "crates/stratify-lang-go",
+  "crates/stratify-lang-rust",
   "crates/stratify-analysis",
   "crates/stratify-report",
   "crates/stratify-telemetry",
@@ -16,7 +17,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/stratify-dev/stratify"
 
@@ -31,6 +32,7 @@ tree-sitter-ruby = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-python = "0.23"
 tree-sitter-go = "0.23"
+tree-sitter-rust = "0.23"
 clap = { version = "4", features = ["derive"] }
 ignore = "0.4"
 insta = { version = "1", features = ["json"] }
