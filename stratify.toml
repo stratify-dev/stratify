@@ -1,0 +1,6 @@
+# Stratify's own configuration, used when scanning this repo.
+# The test fixtures under crates/*/tests/ are intentionally broken sample code
+# (dead functions, cycles, duplication) used to exercise the analyses, so they
+# are excluded from self-analysis.
+[ignore]
+paths = ["crates/*/tests/**"]
