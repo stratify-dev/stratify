@@ -41,6 +41,18 @@ impl IrGraph {
         self.symbols.get(id.0 as usize)
     }
 
+    /// Set the confidence of the reference at `index` (used by post-merge
+    /// resolution to promote an unambiguous intra-file call to Certain).
+    pub fn set_reference_confidence(
+        &mut self,
+        index: usize,
+        confidence: crate::confidence::Confidence,
+    ) {
+        if let Some(r) = self.references.get_mut(index) {
+            r.confidence = confidence;
+        }
+    }
+
     /// Rename a symbol (used by post-merge resolution to rewrite an import key).
     pub fn set_symbol_name(&mut self, id: SymbolId, name: String) {
         if let Some(s) = self.symbols.get_mut(id.0 as usize) {
@@ -245,6 +257,30 @@ mod tests {
             g1.unresolved_calls(),
             &[(SymbolId(1), "target".to_string())]
         );
+    }
+
+    #[test]
+    fn set_reference_confidence_mutates() {
+        let mut g = IrGraph::new();
+        let a = g.add_symbol(sym("a"));
+        let b = g.add_symbol(sym("b"));
+        g.add_reference(Reference {
+            from: a,
+            to: b,
+            kind: RefKind::Calls,
+            span: Span {
+                file: "x".into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            confidence: Confidence::Likely,
+        });
+        g.set_reference_confidence(0, Confidence::Certain);
+        assert_eq!(g.references()[0].confidence, Confidence::Certain);
+        // out-of-range index is a no-op
+        g.set_reference_confidence(99, Confidence::Likely);
+        assert_eq!(g.references()[0].confidence, Confidence::Certain);
     }
 
     #[test]

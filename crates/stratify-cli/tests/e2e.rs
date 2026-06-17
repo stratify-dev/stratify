@@ -14,12 +14,13 @@ fn sample_java_reports_unused_methods() {
         .expect("run stratify binary");
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // `helper` is reached from main via a Likely intra-file call edge -> possibly unused (info).
+    // `helper` is reached from main via an unambiguous intra-file call edge that
+    // B6 promotes to Certain -> genuinely used, so it is NOT reported.
     // `neverCalled` is never reached -> unused (warning).
     assert!(stdout.contains("neverCalled"), "stdout: {stdout}");
     assert!(stdout.contains("warn"), "stdout: {stdout}");
     assert!(
-        stdout.contains("helper") && stdout.contains("possibly unused"),
-        "stdout: {stdout}"
+        !stdout.contains("helper"),
+        "helper is used via a promoted intra-file call and must not be flagged: {stdout}"
     );
 }

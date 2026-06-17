@@ -141,6 +141,7 @@ pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStat
 
     stratify_analysis::resolve::cross_file_calls(&mut graph);
     stratify_analysis::resolve::go_imports(&mut graph);
+    stratify_analysis::resolve::promote_intra_file_calls(&mut graph);
 
     let mut findings = deadcode::analyze(&graph);
     findings.extend(duplication::analyze(&graph, load_dup_min_tokens(root)));
