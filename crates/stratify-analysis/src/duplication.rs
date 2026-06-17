@@ -1,6 +1,23 @@
+use serde::Deserialize;
 use std::collections::HashMap;
 use stratify_core::ir::Span;
 use stratify_core::{Confidence, Finding, IrGraph, Severity};
+
+/// The `[duplication]` table of `stratify.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DuplicationSection {
+    /// Minimum identical normalized-token run length to count as a clone.
+    /// Absent means use the caller's default.
+    #[serde(default)]
+    pub min_tokens: Option<usize>,
+}
+
+/// Wrapper to deserialize just the `[duplication]` table from `stratify.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DuplicationToml {
+    #[serde(default)]
+    pub duplication: DuplicationSection,
+}
 
 /// Detect duplicated code as identical windows of `min_tokens` normalized
 /// tokens. Reports one finding per left-maximal duplicated region, pointing at

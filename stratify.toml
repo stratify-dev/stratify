@@ -4,3 +4,9 @@
 # are excluded from self-analysis.
 [ignore]
 paths = ["crates/*/tests/**"]
+
+# Minimum identical normalized-token run length to count as a clone. The six
+# language adapters share structural shape, so a low threshold floods the report
+# with short parallel fragments. 100 matches the default and keeps real clones.
+[duplication]
+min_tokens = 100
