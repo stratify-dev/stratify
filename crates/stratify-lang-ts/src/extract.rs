@@ -1,9 +1,49 @@
-use stratify_core::ir::{Span, SymbolId};
-use stratify_core::{
-    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
+use stratify_core::ir::SymbolId;
+use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
+use stratify_lang::walk::{
+    cyclomatic, enclosing, node_text, span, tokenize, ComplexityRules, NormalizeRules,
 };
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
+
+/// Node kinds and operator texts that define TypeScript token normalization.
+///
+/// In tree-sitter-typescript `string`/`template_string` are not leaves: the
+/// leaf carrying text is `string_fragment`. Mapping `string_fragment` to "STR"
+/// (and NOT treating templates as atomic) keeps `${a}` substitution identifiers
+/// as "ID", matching the original adapter exactly.
+fn normalize_rules() -> NormalizeRules<'static> {
+    NormalizeRules {
+        identifier_kinds: &[
+            "identifier",
+            "type_identifier",
+            "property_identifier",
+            "shorthand_property_identifier",
+            "shorthand_property_identifier_pattern",
+        ],
+        number_kinds: &["number"],
+        string_kinds: &["string_fragment"],
+        atomic_string_kinds: &[],
+    }
+}
+
+/// Decision kinds and short-circuit operators for TypeScript cyclomatic counting.
+/// Ternaries are counted via `ternary_expression`, so `?` is intentionally absent.
+fn complexity_rules() -> ComplexityRules<'static> {
+    ComplexityRules {
+        decision_kinds: &[
+            "if_statement",
+            "for_statement",
+            "for_in_statement",
+            "while_statement",
+            "do_statement",
+            "switch_case",
+            "ternary_expression",
+            "catch_clause",
+        ],
+        operator_texts: &["&&", "||", "??"],
+    }
+}
 
 /// Strip a trailing TS/JS extension from a file path, returning the bare module key.
 fn strip_ts_ext(path: &str) -> String {
@@ -24,100 +64,14 @@ fn lang_for(file: &str) -> Language {
     }
 }
 
-fn span(file: &str, node: Node) -> Span {
-    Span {
-        file: file.to_string(),
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: node.start_position().row + 1,
-    }
-}
-
-fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    node.utf8_text(src.as_bytes()).unwrap_or("")
-}
-
-fn normalize_ts(kind: &str, text: &str) -> String {
-    match kind {
-        "identifier"
-        | "type_identifier"
-        | "property_identifier"
-        | "shorthand_property_identifier"
-        | "shorthand_property_identifier_pattern" => "ID".to_string(),
-        "number" => "NUM".to_string(),
-        "string" | "template_string" | "string_fragment" => "STR".to_string(),
-        _ => text.to_string(),
-    }
-}
-
-fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
-    if node.child_count() == 0 {
-        out.push(node);
-        return;
-    }
-    let mut c = node.walk();
-    for child in node.children(&mut c) {
-        collect_leaves(child, out);
-    }
-}
-
-fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
-    let mut leaves: Vec<Node> = Vec::new();
-    collect_leaves(root, &mut leaves);
-    for leaf in leaves {
-        if leaf.start_byte() >= leaf.end_byte() {
-            continue;
-        }
-        let t = text(leaf, src);
-        if t.trim().is_empty() {
-            continue;
-        }
-        let norm = normalize_ts(leaf.kind(), t);
-        g.add_token(Token {
-            file: file.to_string(),
-            start_byte: leaf.start_byte(),
-            end_byte: leaf.end_byte(),
-            start_line: leaf.start_position().row + 1,
-            norm,
-        });
-    }
-}
-
 /// Return true if `node` has an ancestor that is an `export_statement`.
 fn is_exported(node: Node) -> bool {
-    let mut cur = node.parent();
-    while let Some(n) = cur {
-        if n.kind() == "export_statement" {
-            return true;
-        }
-        cur = n.parent();
-    }
-    false
+    enclosing(node, &["export_statement"]).is_some()
 }
 
-/// Count decision points in a subtree for cyclomatic complexity.
-fn count_decisions_ts(node: Node) -> u32 {
-    let mut count = 0u32;
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        match n.kind() {
-            "if_statement" | "for_statement" | "for_in_statement" | "while_statement"
-            | "do_statement" | "switch_case" | "ternary_expression" | "catch_clause" | "&&"
-            | "||" | "??" => {
-                count += 1;
-            }
-            _ => {}
-        }
-        let mut c = n.walk();
-        for child in n.children(&mut c) {
-            stack.push(child);
-        }
-    }
-    count
-}
-
-fn cyclomatic_ts(node: Node) -> u32 {
-    1 + count_decisions_ts(node)
+/// Cyclomatic complexity of a TypeScript declaration subtree.
+fn cyclomatic_ts(node: Node, src: &str) -> u32 {
+    cyclomatic(node, src, &complexity_rules())
 }
 
 /// Resolve a TypeScript import specifier to an extension-stripped module key.
@@ -164,34 +118,35 @@ fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> 
         .map(|s| s.id)
 }
 
-pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
-    let lang = lang_for(file);
-
-    let mut parser = Parser::new();
-    parser.set_language(&lang).expect("load typescript grammar");
-    let tree = parser.parse(src, None).expect("parse typescript");
-    let root = tree.root_node();
-
-    let mut g = IrGraph::new();
-
-    // File symbol — fqn is the path with TS extension stripped.
+/// Add the File symbol (fqn = path with TS extension stripped) and mark its
+/// scope as an entrypoint (top-level module code runs on import).
+fn add_file_symbol(g: &mut IrGraph, file: &str, root: Node) -> SymbolId {
     let file_id = g.add_symbol(Symbol {
         id: SymbolId(0),
         kind: SymbolKind::File,
         name: file.to_string(),
         fqn: strip_ts_ext(file),
-        span: span(file, root),
+        span: span(root, file),
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
     });
-
-    // The file scope is always an entrypoint (top-level module code runs on import).
     g.mark_entrypoint(file_id);
+    file_id
+}
 
-    emit_tokens(&mut g, file, src, root);
-
+/// Extract class/function/method/arrow declarations as symbols, with Defines
+/// edges from the file, entrypoint marking for exports, and complexity for
+/// functions.
+fn extract_declarations(
+    g: &mut IrGraph,
+    lang: &Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+) {
     let query = Query::new(
-        &lang,
+        lang,
         r#"
         (class_declaration name: (type_identifier) @class.name) @class.node
         (function_declaration name: (identifier) @func.name) @func.node
@@ -242,75 +197,94 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             }
         }
 
-        if let (Some(name_node), Some(decl_node)) = (name_node, decl_node) {
-            let name = text(name_node, src).to_string();
-            let id = g.add_symbol(Symbol {
-                id: SymbolId(0),
-                kind,
-                name: name.clone(),
-                fqn: name,
-                span: span(file, decl_node),
-                visibility: Visibility::Unknown,
-                confidence: Confidence::Certain,
-            });
-            g.add_reference(Reference {
-                from: file_id,
-                to: id,
-                kind: RefKind::Defines,
-                span: span(file, decl_node),
-                confidence: Confidence::Certain,
-            });
-            // Exported symbols are entrypoints (reachable from other modules).
-            if is_exported(decl_node) {
-                g.mark_entrypoint(id);
+        let (Some(name_node), Some(decl_node)) = (name_node, decl_node) else {
+            continue;
+        };
+        let name = node_text(name_node, src).to_string();
+        let id = g.add_symbol(Symbol {
+            id: SymbolId(0),
+            kind,
+            name: name.clone(),
+            fqn: name,
+            span: span(decl_node, file),
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
+        g.add_reference(Reference {
+            from: file_id,
+            to: id,
+            kind: RefKind::Defines,
+            span: span(decl_node, file),
+            confidence: Confidence::Certain,
+        });
+        // Exported symbols are entrypoints (reachable from other modules).
+        if is_exported(decl_node) {
+            g.mark_entrypoint(id);
+        }
+        // Set complexity for functions.
+        if kind == SymbolKind::Function {
+            g.set_complexity(id, cyclomatic_ts(decl_node, src));
+        }
+    }
+}
+
+/// Resolve relative import specifiers to Dependency symbols + Imports edges.
+fn extract_imports(
+    g: &mut IrGraph,
+    lang: &Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+) {
+    let import_q = Query::new(
+        lang,
+        r#"(import_statement source: (string (string_fragment) @spec))"#,
+    )
+    .expect("ts import query");
+
+    let spec_idx = import_q.capture_index_for_name("spec").unwrap();
+    let mut imp_cursor = QueryCursor::new();
+    let mut imp_matches = imp_cursor.matches(&import_q, root, src.as_bytes());
+    while let Some(m) = imp_matches.next() {
+        for cap in m.captures {
+            if cap.index != spec_idx {
+                continue;
             }
-            // Set complexity for functions.
-            if kind == SymbolKind::Function {
-                g.set_complexity(id, cyclomatic_ts(decl_node));
+            let spec_text = node_text(cap.node, src);
+            if let Some(key) = resolve_ts_import(file, spec_text) {
+                let dep_id = g.add_symbol(Symbol {
+                    id: SymbolId(0),
+                    kind: SymbolKind::Dependency,
+                    name: key.clone(),
+                    fqn: key,
+                    span: span(cap.node, file),
+                    visibility: Visibility::Unknown,
+                    confidence: Confidence::Certain,
+                });
+                g.add_reference(Reference {
+                    from: file_id,
+                    to: dep_id,
+                    kind: RefKind::Imports,
+                    span: span(cap.node, file),
+                    confidence: Confidence::Certain,
+                });
             }
         }
     }
+}
 
-    // Import pass: resolve relative specifiers to Dependency symbols + Imports edges.
-    {
-        let import_q = Query::new(
-            &lang,
-            r#"(import_statement source: (string (string_fragment) @spec))"#,
-        )
-        .expect("ts import query");
-
-        let spec_idx = import_q.capture_index_for_name("spec").unwrap();
-        let mut imp_cursor = QueryCursor::new();
-        let mut imp_matches = imp_cursor.matches(&import_q, root, src.as_bytes());
-        while let Some(m) = imp_matches.next() {
-            for cap in m.captures {
-                if cap.index != spec_idx {
-                    continue;
-                }
-                let spec_text = text(cap.node, src);
-                if let Some(key) = resolve_ts_import(file, spec_text) {
-                    let dep_id = g.add_symbol(Symbol {
-                        id: SymbolId(0),
-                        kind: SymbolKind::Dependency,
-                        name: key.clone(),
-                        fqn: key,
-                        span: span(file, cap.node),
-                        visibility: Visibility::Unknown,
-                        confidence: Confidence::Certain,
-                    });
-                    g.add_reference(Reference {
-                        from: file_id,
-                        to: dep_id,
-                        kind: RefKind::Imports,
-                        span: span(file, cap.node),
-                        confidence: Confidence::Certain,
-                    });
-                }
-            }
-        }
-    }
-
-    // Second pass: intra-file calls. Build a map of Function name -> SymbolId.
+/// Collect intra-file Calls edges and unresolved (cross-file) calls, then emit
+/// them deduplicated into the graph.
+fn extract_calls(
+    g: &mut IrGraph,
+    lang: &Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+) {
+    // Build a map of Function name -> SymbolId.
     let name_to_id: std::collections::HashMap<String, SymbolId> = g
         .symbols()
         .iter()
@@ -319,7 +293,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         .collect();
 
     let call_q = Query::new(
-        &lang,
+        lang,
         r#"
         (call_expression function: (identifier) @callee) @call
         (call_expression function: (member_expression property: (property_identifier) @callee)) @call
@@ -339,7 +313,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let mut call_node = None;
         for cap in m.captures {
             if cap.index == callee_idx {
-                callee_name = Some(text(cap.node, src).to_string());
+                callee_name = Some(node_text(cap.node, src).to_string());
             } else if cap.index == call_idx {
                 call_node = Some(cap.node);
             }
@@ -347,7 +321,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
             continue;
         };
-        let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
+        let from = enclosing_method_id(call_node, g, file).unwrap_or(file_id);
         if let Some(&callee_id) = name_to_id.get(&callee_name) {
             edges.push((from, callee_id));
         } else {
@@ -363,7 +337,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             from,
             to,
             kind: RefKind::Calls,
-            span: span(file, root),
+            span: span(root, file),
             confidence: Confidence::Likely,
         });
     }
@@ -374,6 +348,23 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     for (from, name) in unresolved {
         g.add_unresolved_call(from, name);
     }
+}
+
+pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
+    let lang = lang_for(file);
+
+    let mut parser = Parser::new();
+    parser.set_language(&lang).expect("load typescript grammar");
+    let tree = parser.parse(src, None).expect("parse typescript");
+    let root = tree.root_node();
+
+    let mut g = IrGraph::new();
+
+    let file_id = add_file_symbol(&mut g, file, root);
+    tokenize(&mut g, root, src, file, &normalize_rules());
+    extract_declarations(&mut g, &lang, root, src, file, file_id);
+    extract_imports(&mut g, &lang, root, src, file, file_id);
+    extract_calls(&mut g, &lang, root, src, file, file_id);
 
     g
 }

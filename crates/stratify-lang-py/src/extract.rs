@@ -1,9 +1,38 @@
-use stratify_core::ir::{Span, SymbolId};
-use stratify_core::{
-    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
-};
+use stratify_core::ir::SymbolId;
+use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
+use stratify_lang::walk::{self, ComplexityRules, NormalizeRules};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
+
+/// Leaf-token normalization for Python duplication detection.
+///
+/// In tree-sitter-python a `string` decomposes into `string_start` /
+/// `string_content` / `string_end`. Descending normally and mapping
+/// `string_content` -> STR keeps the quote delimiters as literal tokens, which
+/// is the historical output. `string` and `concatenated_string` are never
+/// leaves; listing them is harmless and documents intent.
+const NORMALIZE_RULES: NormalizeRules = NormalizeRules {
+    identifier_kinds: &["identifier"],
+    number_kinds: &["integer", "float"],
+    string_kinds: &["string", "string_content", "concatenated_string"],
+    atomic_string_kinds: &[],
+};
+
+/// Named decision-point kinds for cyclomatic complexity. `boolean_operator`
+/// covers `and`/`or`, so no operator-text leaves are needed.
+const COMPLEXITY_RULES: ComplexityRules = ComplexityRules {
+    decision_kinds: &[
+        "if_statement",
+        "elif_clause",
+        "for_statement",
+        "while_statement",
+        "except_clause",
+        "conditional_expression",
+        "boolean_operator",
+        "case_clause",
+    ],
+    operator_texts: &[],
+};
 
 /// Strip a trailing .py or .pyi extension from a file path.
 fn strip_py_ext(path: &str) -> String {
@@ -26,91 +55,6 @@ fn py_module_key(path: &str) -> String {
     } else {
         stripped
     }
-}
-
-fn span(file: &str, node: Node) -> Span {
-    Span {
-        file: file.to_string(),
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: node.start_position().row + 1,
-    }
-}
-
-fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    node.utf8_text(src.as_bytes()).unwrap_or("")
-}
-
-fn normalize_py(kind: &str, text: &str) -> String {
-    match kind {
-        "identifier" => "ID".to_string(),
-        "integer" | "float" => "NUM".to_string(),
-        "string" | "string_content" | "concatenated_string" => "STR".to_string(),
-        _ => text.to_string(),
-    }
-}
-
-fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
-    if node.child_count() == 0 {
-        out.push(node);
-        return;
-    }
-    let mut c = node.walk();
-    for child in node.children(&mut c) {
-        collect_leaves(child, out);
-    }
-}
-
-fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
-    let mut leaves: Vec<Node> = Vec::new();
-    collect_leaves(root, &mut leaves);
-    for leaf in leaves {
-        if leaf.start_byte() >= leaf.end_byte() {
-            continue;
-        }
-        let t = text(leaf, src);
-        if t.trim().is_empty() {
-            continue;
-        }
-        let norm = normalize_py(leaf.kind(), t);
-        g.add_token(Token {
-            file: file.to_string(),
-            start_byte: leaf.start_byte(),
-            end_byte: leaf.end_byte(),
-            start_line: leaf.start_position().row + 1,
-            norm,
-        });
-    }
-}
-
-/// Count decision points in a subtree for cyclomatic complexity.
-fn count_decisions_py(node: Node) -> u32 {
-    let mut count = 0u32;
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        match n.kind() {
-            "if_statement"
-            | "elif_clause"
-            | "for_statement"
-            | "while_statement"
-            | "except_clause"
-            | "conditional_expression"
-            | "boolean_operator"
-            | "case_clause" => {
-                count += 1;
-            }
-            _ => {}
-        }
-        let mut c = n.walk();
-        for child in n.children(&mut c) {
-            stack.push(child);
-        }
-    }
-    count
-}
-
-fn cyclomatic_py(node: Node) -> u32 {
-    1 + count_decisions_py(node)
 }
 
 /// Find the function that lexically encloses `node` by matching byte ranges against
@@ -169,33 +113,24 @@ fn resolve_relative_py(
     Some(parts.join("/"))
 }
 
-pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
-    let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-
-    let mut parser = Parser::new();
-    parser.set_language(&lang).expect("load python grammar");
-    let tree = parser.parse(src, None).expect("parse python");
-    let root = tree.root_node();
-
-    let mut g = IrGraph::new();
-
-    // File symbol — fqn collapses __init__.py to its package dir so that
-    // `import pkg` (key "pkg") resolves to pkg/__init__.py (fqn "pkg").
-    let file_id = g.add_symbol(Symbol {
+/// Add the File symbol. Its fqn collapses __init__.py to its package dir so that
+/// `import pkg` (key "pkg") resolves to pkg/__init__.py (fqn "pkg").
+fn add_file_symbol(g: &mut IrGraph, file: &str, root: Node) -> SymbolId {
+    g.add_symbol(Symbol {
         id: SymbolId(0),
         kind: SymbolKind::File,
         name: file.to_string(),
         fqn: py_module_key(file),
-        span: span(file, root),
+        span: walk::span(root, file),
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
-    });
+    })
+}
 
-    // The file is always an entrypoint (Python has no exports; top-level code runs on import).
-    g.mark_entrypoint(file_id);
-
-    emit_tokens(&mut g, file, src, root);
-
+/// Extract class/function definitions: add symbols, Defines edges (from the
+/// file), and function complexity.
+fn extract_definitions(g: &mut IrGraph, file: &str, src: &str, root: Node, file_id: SymbolId) {
+    let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
     let query = Query::new(
         &lang,
         r#"
@@ -231,32 +166,49 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             }
         }
 
-        if let (Some(name_node), Some(decl_node)) = (name_node, decl_node) {
-            let name = text(name_node, src).to_string();
-            let id = g.add_symbol(Symbol {
-                id: SymbolId(0),
-                kind,
-                name: name.clone(),
-                fqn: name,
-                span: span(file, decl_node),
-                visibility: Visibility::Unknown,
-                confidence: Confidence::Certain,
-            });
-            g.add_reference(Reference {
-                from: file_id,
-                to: id,
-                kind: RefKind::Defines,
-                span: span(file, decl_node),
-                confidence: Confidence::Certain,
-            });
-            // Set complexity for function definitions.
-            if kind == SymbolKind::Function {
-                g.set_complexity(id, cyclomatic_py(decl_node));
-            }
-        }
+        let (Some(name_node), Some(decl_node)) = (name_node, decl_node) else {
+            continue;
+        };
+        add_definition(g, file, src, file_id, kind, name_node, decl_node);
     }
+}
 
-    // Second pass: intra-file calls. Build a map of Function name -> SymbolId.
+/// Add one definition symbol with its Defines edge and (for functions) complexity.
+fn add_definition(
+    g: &mut IrGraph,
+    file: &str,
+    src: &str,
+    file_id: SymbolId,
+    kind: SymbolKind,
+    name_node: Node,
+    decl_node: Node,
+) {
+    let name = walk::node_text(name_node, src).to_string();
+    let id = g.add_symbol(Symbol {
+        id: SymbolId(0),
+        kind,
+        name: name.clone(),
+        fqn: name,
+        span: walk::span(decl_node, file),
+        visibility: Visibility::Unknown,
+        confidence: Confidence::Certain,
+    });
+    g.add_reference(Reference {
+        from: file_id,
+        to: id,
+        kind: RefKind::Defines,
+        span: walk::span(decl_node, file),
+        confidence: Confidence::Certain,
+    });
+    if kind == SymbolKind::Function {
+        g.set_complexity(id, walk::cyclomatic(decl_node, src, &COMPLEXITY_RULES));
+    }
+}
+
+/// Extract calls: intra-file Calls edges (resolved by function name) plus
+/// unresolved cross-file calls. `from` is the enclosing function or the file.
+fn extract_calls(g: &mut IrGraph, file: &str, src: &str, root: Node, file_id: SymbolId) {
+    let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
     let name_to_id: std::collections::HashMap<String, SymbolId> = g
         .symbols()
         .iter()
@@ -285,7 +237,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let mut call_node = None;
         for cap in m.captures {
             if cap.index == callee_idx {
-                callee_name = Some(text(cap.node, src).to_string());
+                callee_name = Some(walk::node_text(cap.node, src).to_string());
             } else if cap.index == call_idx {
                 call_node = Some(cap.node);
             }
@@ -293,7 +245,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
             continue;
         };
-        let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
+        let from = enclosing_method_id(call_node, g, file).unwrap_or(file_id);
         if let Some(&callee_id) = name_to_id.get(&callee_name) {
             edges.push((from, callee_id));
         } else {
@@ -309,7 +261,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             from,
             to,
             kind: RefKind::Calls,
-            span: span(file, root),
+            span: walk::span(root, file),
             confidence: Confidence::Likely,
         });
     }
@@ -320,94 +272,94 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     for (from, name) in unresolved {
         g.add_unresolved_call(from, name);
     }
+}
 
-    // Import pass: collect path keys for each import statement and emit
-    // Dependency symbols + Imports edges.
-    //
-    // Actual tree-sitter-python shapes (verified via to_sexp()):
-    //   import a.b      -> (import_statement name: (dotted_name ...))
-    //   from c.d import x
-    //                   -> (import_from_statement module_name: (dotted_name ...)
-    //                         name: (dotted_name ...))
-    //   from .sib import y
-    //                   -> (import_from_statement
-    //                         module_name: (relative_import (import_prefix) (dotted_name ...))
-    //                         name: (dotted_name ...))
-    //   from . import sub
-    //                   -> (import_from_statement
-    //                         module_name: (relative_import (import_prefix))
-    //                         name: (dotted_name ...))
+/// Path keys for a single `from ... import ...` statement (absolute or relative).
+///
+/// Actual tree-sitter-python shapes (verified via to_sexp()):
+///   from c.d import x
+///       -> (import_from_statement module_name: (dotted_name ...) name: (dotted_name ...))
+///   from .sib import y
+///       -> (import_from_statement
+///             module_name: (relative_import (import_prefix) (dotted_name ...)))
+///   from . import sub
+///       -> (import_from_statement module_name: (relative_import (import_prefix)))
+fn import_from_keys(stmt: Node, file: &str, src: &str) -> Vec<String> {
+    let Some(mn) = stmt.child_by_field_name("module_name") else {
+        return Vec::new();
+    };
+    match mn.kind() {
+        // Absolute: from c.d import x -> key c/d
+        "dotted_name" => vec![dotted_to_path(walk::node_text(mn, src))],
+        "relative_import" => relative_import_keys(stmt, mn, file, src),
+        _ => Vec::new(),
+    }
+}
+
+/// Path keys for a `relative_import` module_name (`mn`) within statement `stmt`.
+fn relative_import_keys(stmt: Node, mn: Node, file: &str, src: &str) -> Vec<String> {
+    let mut dots = 0usize;
+    let mut dotted_module = String::new();
+    let mut mn_cursor = mn.walk();
+    for child in mn.children(&mut mn_cursor) {
+        match child.kind() {
+            "import_prefix" => {
+                dots = walk::node_text(child, src)
+                    .chars()
+                    .filter(|&c| c == '.')
+                    .count();
+            }
+            "dotted_name" => {
+                dotted_module = walk::node_text(child, src).to_string();
+            }
+            _ => {}
+        }
+    }
+    if !dotted_module.is_empty() {
+        // from .sib import y -> resolve against file
+        return resolve_relative_py(file, dots, &dotted_module, None)
+            .into_iter()
+            .collect();
+    }
+    // from . import sub -> one key per imported name (each a dotted_name)
+    let mut keys = Vec::new();
+    let mut stmt_cursor = stmt.walk();
+    for name_node in stmt.children_by_field_name("name", &mut stmt_cursor) {
+        let imported_name = walk::node_text(name_node, src);
+        if let Some(key) = resolve_relative_py(file, dots, "", Some(imported_name)) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// Collect import path keys for every top-level import statement.
+fn collect_import_keys(root: Node, file: &str, src: &str) -> Vec<String> {
     let mut import_keys: Vec<String> = Vec::new();
-    let mut cursor2 = root.walk();
-    for stmt in root.children(&mut cursor2) {
+    let mut cursor = root.walk();
+    for stmt in root.children(&mut cursor) {
         match stmt.kind() {
             "import_statement" => {
                 // `import a.b` — find the `name:` dotted_name child
                 for i in 0..stmt.child_count() {
                     let child = stmt.child(i).unwrap();
                     if child.kind() == "dotted_name" {
-                        import_keys.push(dotted_to_path(text(child, src)));
+                        import_keys.push(dotted_to_path(walk::node_text(child, src)));
                     }
                 }
             }
             "import_from_statement" => {
-                let module_name_node = stmt.child_by_field_name("module_name");
-                if let Some(mn) = module_name_node {
-                    match mn.kind() {
-                        "dotted_name" => {
-                            // Absolute: from c.d import x -> key c/d
-                            import_keys.push(dotted_to_path(text(mn, src)));
-                        }
-                        "relative_import" => {
-                            // Count dots via import_prefix node text
-                            let mut dots = 0usize;
-                            let mut dotted_module = String::new();
-                            let mut mn_cursor = mn.walk();
-                            for child in mn.children(&mut mn_cursor) {
-                                match child.kind() {
-                                    "import_prefix" => {
-                                        dots =
-                                            text(child, src).chars().filter(|&c| c == '.').count();
-                                    }
-                                    "dotted_name" => {
-                                        dotted_module = text(child, src).to_string();
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            if !dotted_module.is_empty() {
-                                // from .sib import y -> resolve against file
-                                if let Some(key) =
-                                    resolve_relative_py(file, dots, &dotted_module, None)
-                                {
-                                    import_keys.push(key);
-                                }
-                            } else {
-                                // from . import sub -> one key per imported name
-                                // The name: children of import_from_statement are dotted_names
-                                let mut stmt_cursor = stmt.walk();
-                                for name_node in
-                                    stmt.children_by_field_name("name", &mut stmt_cursor)
-                                {
-                                    // Each name is a dotted_name; grab its first identifier
-                                    let imported_name = text(name_node, src);
-                                    if let Some(key) =
-                                        resolve_relative_py(file, dots, "", Some(imported_name))
-                                    {
-                                        import_keys.push(key);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                import_keys.extend(import_from_keys(stmt, file, src));
             }
             _ => {}
         }
     }
+    import_keys
+}
 
-    // Emit Dependency symbols and Imports edges for each resolved key.
+/// Emit Dependency symbols and Imports edges for each resolved import key.
+fn extract_imports(g: &mut IrGraph, file: &str, src: &str, root: Node, file_id: SymbolId) {
+    let mut import_keys = collect_import_keys(root, file, src);
     import_keys.sort_unstable();
     import_keys.dedup();
     for key in import_keys {
@@ -416,7 +368,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             kind: SymbolKind::Dependency,
             name: key.clone(),
             fqn: key,
-            span: span(file, root),
+            span: walk::span(root, file),
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });
@@ -424,10 +376,31 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             from: file_id,
             to: dep_id,
             kind: RefKind::Imports,
-            span: span(file, root),
+            span: walk::span(root, file),
             confidence: Confidence::Certain,
         });
     }
+}
+
+pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
+    let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+
+    let mut parser = Parser::new();
+    parser.set_language(&lang).expect("load python grammar");
+    let tree = parser.parse(src, None).expect("parse python");
+    let root = tree.root_node();
+
+    let mut g = IrGraph::new();
+
+    let file_id = add_file_symbol(&mut g, file, root);
+    // The file is always an entrypoint (Python has no exports; top-level code runs on import).
+    g.mark_entrypoint(file_id);
+
+    walk::tokenize(&mut g, root, src, file, &NORMALIZE_RULES);
+
+    extract_definitions(&mut g, file, src, root, file_id);
+    extract_calls(&mut g, file, src, root, file_id);
+    extract_imports(&mut g, file, src, root, file_id);
 
     g
 }

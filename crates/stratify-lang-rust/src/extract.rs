@@ -1,49 +1,39 @@
-use stratify_core::ir::{Span, SymbolId};
-use stratify_core::{
-    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
-};
+use stratify_core::ir::SymbolId;
+use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
+use stratify_lang::walk::{self, ComplexityRules, NormalizeRules};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
+
+/// Leaf-token normalization for Rust. Identifier/number/char kinds collapse to
+/// ID/NUM/STR. `string_literal`/`raw_string_literal` are ATOMIC: tree-sitter-rust
+/// 0.23 decomposes them into quote delimiters + a `string_content` child, so they
+/// are emitted as a single `STR` without descending and their contents never leak.
+const NORMALIZE_RULES: NormalizeRules = NormalizeRules {
+    identifier_kinds: &["identifier", "field_identifier", "type_identifier"],
+    number_kinds: &["integer_literal", "float_literal"],
+    string_kinds: &["char_literal"],
+    atomic_string_kinds: &["string_literal", "raw_string_literal"],
+};
+
+/// Cyclomatic decision points for Rust. Branching constructs and short-circuit/`?`
+/// operators each add one. Deliberately does NOT count `loop_expression`
+/// (unconditional).
+const COMPLEXITY_RULES: ComplexityRules = ComplexityRules {
+    decision_kinds: &[
+        "if_expression",
+        "while_expression",
+        "for_expression",
+        "match_arm",
+        "try_expression",
+    ],
+    operator_texts: &["&&", "||"],
+};
 
 fn package_dir(path: &str) -> String {
     std::path::Path::new(path)
         .parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default()
-}
-
-/// Cyclomatic decision points for Rust. Mirrors `count_decisions_go`: walk the
-/// subtree and count branching constructs and short-circuit/`?` operators.
-/// Deliberately does NOT count `loop_expression` (unconditional).
-fn count_decisions_rust(node: Node) -> u32 {
-    let mut count = 0u32;
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if n.is_named() {
-            match n.kind() {
-                "if_expression" | "while_expression" | "for_expression" | "match_arm"
-                | "try_expression" => {
-                    count += 1;
-                }
-                _ => {}
-            }
-        } else {
-            // Operator/punctuation tokens are unnamed leaves.
-            match n.kind() {
-                "&&" | "||" => count += 1,
-                _ => {}
-            }
-        }
-        let mut c = n.walk();
-        for child in n.children(&mut c) {
-            stack.push(child);
-        }
-    }
-    count
-}
-
-fn cyclomatic_rust(node: Node) -> u32 {
-    1 + count_decisions_rust(node)
 }
 
 /// Find the function that lexically encloses `node` by matching byte ranges
@@ -59,84 +49,18 @@ fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> 
         .map(|s| s.id)
 }
 
-fn span(file: &str, node: Node) -> Span {
-    Span {
-        file: file.to_string(),
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: node.start_position().row + 1,
-    }
-}
-
-fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    node.utf8_text(src.as_bytes()).unwrap_or("")
-}
-
-fn normalize_rust(kind: &str, text: &str) -> String {
-    match kind {
-        "identifier" | "field_identifier" | "type_identifier" => "ID".to_string(),
-        "integer_literal" | "float_literal" => "NUM".to_string(),
-        "string_literal" | "raw_string_literal" | "char_literal" => "STR".to_string(),
-        _ => text.to_string(),
-    }
-}
-
-fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
-    // In tree-sitter-rust 0.23 string literals are NOT leaves: they decompose
-    // into quote delimiters + a `string_content` child. Treat them as atomic so
-    // `normalize_rust` collapses the whole literal to a single `STR` token and
-    // the contents never leak into the token stream.
-    if matches!(node.kind(), "string_literal" | "raw_string_literal") {
-        out.push(node);
-        return;
-    }
-    if node.child_count() == 0 {
-        out.push(node);
-        return;
-    }
-    let mut c = node.walk();
-    for child in node.children(&mut c) {
-        collect_leaves(child, out);
-    }
-}
-
-fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
-    let mut leaves: Vec<Node> = Vec::new();
-    collect_leaves(root, &mut leaves);
-    for leaf in leaves {
-        if leaf.start_byte() >= leaf.end_byte() {
-            continue;
-        }
-        let t = text(leaf, src);
-        if t.trim().is_empty() {
-            continue;
-        }
-        let norm = normalize_rust(leaf.kind(), t);
-        g.add_token(Token {
-            file: file.to_string(),
-            start_byte: leaf.start_byte(),
-            end_byte: leaf.end_byte(),
-            start_line: leaf.start_position().row + 1,
-            norm,
-        });
-    }
-}
-
 /// True if the nearest `impl_item` enclosing this `function_item` is a *trait*
 /// impl (`impl Trait for Type`). The grammar exposes `impl_item`'s `trait` field
 /// only for trait impls, not for inherent impls (`impl Type`). Methods of a trait
 /// impl are invoked via the trait and get no in-file Calls edge, so they must be
 /// treated as entrypoints to avoid false dead-code reports.
 fn in_trait_impl(node: Node) -> bool {
-    let mut cur = node.parent();
-    while let Some(n) = cur {
-        match n.kind() {
-            "impl_item" => return n.child_by_field_name("trait").is_some(),
-            "source_file" => return false,
-            _ => cur = n.parent(),
-        }
+    match walk::enclosing(node, &["impl_item"]) {
+        // `enclosing` includes `node` itself; a `function_item` is never an
+        // `impl_item`, so the match starts at the nearest ancestor impl.
+        Some(imp) => imp.child_by_field_name("trait").is_some(),
+        None => false,
     }
-    false
 }
 
 /// True if the `function_item` node has a `visibility_modifier` child
@@ -157,7 +81,7 @@ fn has_test_attribute(node: Node, src: &str) -> bool {
     while let Some(p) = prev {
         match p.kind() {
             "attribute_item" => {
-                if text(p, src).contains("test") {
+                if walk::node_text(p, src).contains("test") {
                     return true;
                 }
                 prev = p.prev_sibling();
@@ -171,20 +95,24 @@ fn has_test_attribute(node: Node, src: &str) -> bool {
     false
 }
 
-/// Find the `function_item` that lexically encloses `node` by walking ancestors.
-/// Returns its symbol id via the same span-matching used by `enclosing_method_id`.
-/// Used for macro-recovered calls, whose callee identifiers live inside an opaque
-/// `token_tree` that the normal `enclosing_method_id` byte-range lookup also handles,
-/// but walking ancestors keeps intent explicit for the macro pass.
+/// `function_item`, any `pub` item, `#[test]`-annotated fn, or trait-impl method
+/// is an entrypoint. A Rust lib's public surface, tests, and trait methods are
+/// real entry points; without this every public function would be flagged dead.
+fn is_entrypoint(decl_node: Node, name: &str, src: &str) -> bool {
+    name == "main"
+        || has_visibility(decl_node)
+        || has_test_attribute(decl_node, src)
+        || in_trait_impl(decl_node)
+}
+
+/// Find the `function_item` that lexically encloses `node`, then resolve its
+/// symbol id via the same span-matching used by `enclosing_method_id`. Used for
+/// macro-recovered calls, whose callee identifiers live inside an opaque
+/// `token_tree`; walking ancestors keeps intent explicit for the macro pass.
 fn enclosing_fn_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> {
-    let mut cur = node.parent();
-    while let Some(n) = cur {
-        if n.kind() == "function_item" {
-            return enclosing_method_id(n, g, file);
-        }
-        cur = n.parent();
-    }
-    None
+    // `node` here is a `macro_invocation`, never a `function_item`, so `enclosing`
+    // (which includes self) returns the nearest ancestor function as intended.
+    walk::enclosing(node, &["function_item"]).and_then(|n| enclosing_method_id(n, g, file))
 }
 
 /// True if `node` is the "open paren" that follows a callee identifier inside a
@@ -211,7 +139,7 @@ fn collect_macro_callees<'a>(tree: Node<'a>, src: &'a str, out: &mut Vec<String>
         if child.kind() == "identifier" {
             if let Some(next) = children.get(i + 1) {
                 if starts_call_args(*next) {
-                    out.push(text(*child, src).to_string());
+                    out.push(walk::node_text(*child, src).to_string());
                 }
             }
         }
@@ -263,34 +191,18 @@ fn recover_macro_calls(
     }
 }
 
-pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
-    let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-
-    let mut parser = Parser::new();
-    parser.set_language(&lang).expect("load rust grammar");
-    let tree = parser.parse(src, None).expect("parse rust");
-    let root = tree.root_node();
-
-    let mut g = IrGraph::new();
-
-    // File symbol — fqn is the parent dir of the path (mirror go).
-    let file_id = g.add_symbol(Symbol {
-        id: SymbolId(0),
-        kind: SymbolKind::File,
-        name: file.to_string(),
-        fqn: package_dir(file),
-        span: span(file, root),
-        visibility: Visibility::Unknown,
-        confidence: Confidence::Certain,
-    });
-
-    emit_tokens(&mut g, file, src, root);
-
-    // NOTE: No import edges. `use`/`mod` resolution is intentionally out of scope
-    // for Rust (boundaries/cycles deferred), mirroring how M13 Go shipped.
-
+/// Run the symbol query: define File-relative Function/Class symbols, mark
+/// entrypoints, and record cyclomatic complexity for functions.
+fn extract_symbols(
+    g: &mut IrGraph,
+    lang: &tree_sitter::Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+) {
     let query = Query::new(
-        &lang,
+        lang,
         r#"
         (function_item name: (identifier) @func.name) @func.node
         (struct_item name: (type_identifier) @type.name) @type.node
@@ -326,50 +238,53 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             }
         }
 
-        if let (Some(name_node), Some(decl_node)) = (name_node, decl_node) {
-            let name = text(name_node, src).to_string();
-            let id = g.add_symbol(Symbol {
-                id: SymbolId(0),
-                kind,
-                name: name.clone(),
-                fqn: name.clone(),
-                span: span(file, decl_node),
-                visibility: Visibility::Unknown,
-                confidence: Confidence::Certain,
-            });
-            g.add_reference(Reference {
-                from: file_id,
-                to: id,
-                kind: RefKind::Defines,
-                span: span(file, decl_node),
-                confidence: Confidence::Certain,
-            });
-            if kind == SymbolKind::Function {
-                // Entrypoints: `main`, any `pub` item, or a test-annotated fn.
-                // A Rust lib's public surface and tests are real entry points;
-                // without this every public function would be flagged dead.
-                if name == "main"
-                    || has_visibility(decl_node)
-                    || has_test_attribute(decl_node, src)
-                    || in_trait_impl(decl_node)
-                {
-                    g.mark_entrypoint(id);
-                }
-                g.set_complexity(id, cyclomatic_rust(decl_node));
+        let (Some(name_node), Some(decl_node)) = (name_node, decl_node) else {
+            continue;
+        };
+        let name = walk::node_text(name_node, src).to_string();
+        let id = g.add_symbol(Symbol {
+            id: SymbolId(0),
+            kind,
+            name: name.clone(),
+            fqn: name.clone(),
+            span: walk::span(decl_node, file),
+            visibility: Visibility::Unknown,
+            confidence: Confidence::Certain,
+        });
+        g.add_reference(Reference {
+            from: file_id,
+            to: id,
+            kind: RefKind::Defines,
+            span: walk::span(decl_node, file),
+            confidence: Confidence::Certain,
+        });
+        if kind == SymbolKind::Function {
+            if is_entrypoint(decl_node, &name, src) {
+                g.mark_entrypoint(id);
             }
+            g.set_complexity(id, walk::cyclomatic(decl_node, src, &COMPLEXITY_RULES));
         }
     }
+}
 
-    // Intra-file calls. Build a map of Function name -> SymbolId.
-    let name_to_id: std::collections::HashMap<String, SymbolId> = g
-        .symbols()
-        .iter()
-        .filter(|s| matches!(s.kind, SymbolKind::Function))
-        .map(|s| (s.name.clone(), s.id))
-        .collect();
+/// Resolved (intra-file) and unresolved (cross-file) call buffers.
+type CallEdges = (Vec<(SymbolId, SymbolId)>, Vec<(SymbolId, String)>);
 
+/// Run the call query and collect resolved (`edges`) and unresolved
+/// (cross-file) intra-file Calls. `from` is the enclosing function or the File.
+fn extract_calls(
+    g: &IrGraph,
+    lang: &tree_sitter::Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+    name_to_id: &std::collections::HashMap<String, SymbolId>,
+) -> CallEdges {
+    let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
+    let mut unresolved: Vec<(SymbolId, String)> = Vec::new();
     let call_q = Query::new(
-        &lang,
+        lang,
         r#"
         (call_expression function: (identifier) @callee) @call
         (call_expression function: (field_expression field: (field_identifier) @callee)) @call
@@ -382,14 +297,12 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
 
     let mut call_cursor = QueryCursor::new();
     let mut call_matches = call_cursor.matches(&call_q, root, src.as_bytes());
-    let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
-    let mut unresolved: Vec<(SymbolId, String)> = Vec::new();
     while let Some(m) = call_matches.next() {
         let mut callee_name = None;
         let mut call_node = None;
         for cap in m.captures {
             if cap.index == callee_idx {
-                callee_name = Some(text(cap.node, src).to_string());
+                callee_name = Some(walk::node_text(cap.node, src).to_string());
             } else if cap.index == call_idx {
                 call_node = Some(cap.node);
             }
@@ -397,13 +310,54 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
             continue;
         };
-        let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
+        let from = enclosing_method_id(call_node, g, file).unwrap_or(file_id);
         if let Some(&callee_id) = name_to_id.get(&callee_name) {
             edges.push((from, callee_id));
         } else {
             unresolved.push((from, callee_name));
         }
     }
+    (edges, unresolved)
+}
+
+pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
+    let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+
+    let mut parser = Parser::new();
+    parser.set_language(&lang).expect("load rust grammar");
+    let tree = parser.parse(src, None).expect("parse rust");
+    let root = tree.root_node();
+
+    let mut g = IrGraph::new();
+
+    // File symbol — fqn is the parent dir of the path (mirror go).
+    let file_id = g.add_symbol(Symbol {
+        id: SymbolId(0),
+        kind: SymbolKind::File,
+        name: file.to_string(),
+        fqn: package_dir(file),
+        span: walk::span(root, file),
+        visibility: Visibility::Unknown,
+        confidence: Confidence::Certain,
+    });
+
+    walk::tokenize(&mut g, root, src, file, &NORMALIZE_RULES);
+
+    // NOTE: No import edges. `use`/`mod` resolution is intentionally out of scope
+    // for Rust (boundaries/cycles deferred), mirroring how M13 Go shipped.
+
+    extract_symbols(&mut g, &lang, root, src, file, file_id);
+
+    // Intra-file calls. Build a map of Function name -> SymbolId.
+    let name_to_id: std::collections::HashMap<String, SymbolId> = g
+        .symbols()
+        .iter()
+        .filter(|s| matches!(s.kind, SymbolKind::Function))
+        .map(|s| (s.name.clone(), s.id))
+        .collect();
+
+    let (mut edges, mut unresolved) =
+        extract_calls(&g, &lang, root, src, file, file_id, &name_to_id);
 
     // B5: recover call-like identifiers hidden inside macro invocations.
     // tree-sitter-rust parses macro arguments as an opaque `token_tree`, so a
@@ -433,7 +387,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             from,
             to,
             kind: RefKind::Calls,
-            span: span(file, root),
+            span: walk::span(root, file),
             confidence: Confidence::Likely,
         });
     }
@@ -620,7 +574,10 @@ impl S { fn inherent_unused(&self) {} }
                 .any(|r| matches!(r.kind, RefKind::Calls) && r.to == to)
         };
         assert!(has_call_to(id("a")), "expected recovered call to a");
-        assert!(has_call_to(id("b")), "expected recovered call to b (nested)");
+        assert!(
+            has_call_to(id("b")),
+            "expected recovered call to b (nested)"
+        );
     }
 
     #[test]

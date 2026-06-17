@@ -7,8 +7,12 @@ use stratify_core::{IrGraph, Report, Severity, SymbolKind};
 use stratify_lang::LanguageAdapter;
 use stratify_lang_java::JavaAdapter;
 
-/// Minimum identical normalized-token run length to count as a clone.
-const DUP_MIN_TOKENS: usize = 40;
+/// Default minimum identical normalized-token run length to count as a clone.
+/// Tunable per repo via `[duplication] min_tokens` in stratify.toml. Set high
+/// enough that short structurally-parallel fragments (the language adapters
+/// share shape) stop firing, while real clones remain. PMD CPD defaults to a
+/// similar 75-100 token range.
+const DUP_MIN_TOKENS_DEFAULT: usize = 100;
 
 /// Cyclomatic complexity above this is reported.
 const COMPLEXITY_THRESHOLD: u32 = 10;
@@ -139,7 +143,7 @@ pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStat
     stratify_analysis::resolve::go_imports(&mut graph);
 
     let mut findings = deadcode::analyze(&graph);
-    findings.extend(duplication::analyze(&graph, DUP_MIN_TOKENS));
+    findings.extend(duplication::analyze(&graph, load_dup_min_tokens(root)));
     findings.extend(stratify_analysis::complexity::analyze(
         &graph,
         COMPLEXITY_THRESHOLD,
@@ -174,6 +178,19 @@ fn load_ignore_globs(root: &Path) -> globset::GlobSet {
             stratify_analysis::ignore::ignore_globset(&cfg.ignore.paths)
         }
         Err(_) => globset::GlobSet::empty(),
+    }
+}
+
+/// Resolve the duplication `min_tokens` from `[duplication]` in stratify.toml,
+/// falling back to `DUP_MIN_TOKENS_DEFAULT` when absent or unreadable.
+fn load_dup_min_tokens(root: &Path) -> usize {
+    match std::fs::read_to_string(root.join("stratify.toml")) {
+        Ok(text) => {
+            let cfg: stratify_analysis::duplication::DuplicationToml =
+                toml::from_str(&text).unwrap_or_default();
+            cfg.duplication.min_tokens.unwrap_or(DUP_MIN_TOKENS_DEFAULT)
+        }
+        Err(_) => DUP_MIN_TOKENS_DEFAULT,
     }
 }
 

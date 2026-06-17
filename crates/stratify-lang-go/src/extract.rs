@@ -1,9 +1,45 @@
-use stratify_core::ir::{Span, SymbolId};
-use stratify_core::{
-    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
-};
+use stratify_core::ir::SymbolId;
+use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
+use stratify_lang::walk::{self, ComplexityRules, NormalizeRules};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
+
+/// Leaf-token normalization for Go duplication detection.
+///
+/// In tree-sitter-go an `interpreted_string_literal` / `raw_string_literal`
+/// decomposes into quote (or backtick) delimiter leaves plus a content leaf, so
+/// those parent kinds are never leaves themselves. Listing them in
+/// `string_kinds` is therefore a no-op that documents intent; the delimiters
+/// emit as literal tokens and the content emits as raw text, which is the
+/// historical output. Only `rune_literal` is a true leaf that collapses to STR.
+const NORMALIZE_RULES: NormalizeRules = NormalizeRules {
+    identifier_kinds: &[
+        "identifier",
+        "field_identifier",
+        "type_identifier",
+        "package_identifier",
+    ],
+    number_kinds: &["int_literal", "float_literal", "imaginary_literal"],
+    string_kinds: &[
+        "interpreted_string_literal",
+        "raw_string_literal",
+        "rune_literal",
+    ],
+    atomic_string_kinds: &[],
+};
+
+/// Named decision-point kinds for cyclomatic complexity. `&&` / `||` are
+/// unnamed operator leaves counted via `operator_texts`.
+const COMPLEXITY_RULES: ComplexityRules = ComplexityRules {
+    decision_kinds: &[
+        "if_statement",
+        "for_statement",
+        "expression_case",
+        "type_case",
+        "communication_case",
+    ],
+    operator_texts: &["&&", "||"],
+};
 
 fn package_dir(path: &str) -> String {
     std::path::Path::new(path)
@@ -19,29 +55,6 @@ fn is_exported_go(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn count_decisions_go(node: Node) -> u32 {
-    let mut count = 0u32;
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        match n.kind() {
-            "if_statement" | "for_statement" | "expression_case" | "type_case"
-            | "communication_case" | "&&" | "||" => {
-                count += 1;
-            }
-            _ => {}
-        }
-        let mut c = n.walk();
-        for child in n.children(&mut c) {
-            stack.push(child);
-        }
-    }
-    count
-}
-
-fn cyclomatic_go(node: Node) -> u32 {
-    1 + count_decisions_go(node)
-}
-
 /// Find the method that lexically encloses `node` by matching byte ranges against
 /// known Function symbols in this file's graph.
 fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> {
@@ -55,88 +68,23 @@ fn enclosing_method_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> 
         .map(|s| s.id)
 }
 
-fn span(file: &str, node: Node) -> Span {
-    Span {
-        file: file.to_string(),
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: node.start_position().row + 1,
-    }
-}
-
-fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    node.utf8_text(src.as_bytes()).unwrap_or("")
-}
-
-fn normalize_go(kind: &str, text: &str) -> String {
-    match kind {
-        "identifier" | "field_identifier" | "type_identifier" | "package_identifier" => {
-            "ID".to_string()
-        }
-        "int_literal" | "float_literal" | "imaginary_literal" => "NUM".to_string(),
-        "interpreted_string_literal" | "raw_string_literal" | "rune_literal" => "STR".to_string(),
-        _ => text.to_string(),
-    }
-}
-
-fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
-    if node.child_count() == 0 {
-        out.push(node);
-        return;
-    }
-    let mut c = node.walk();
-    for child in node.children(&mut c) {
-        collect_leaves(child, out);
-    }
-}
-
-fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
-    let mut leaves: Vec<Node> = Vec::new();
-    collect_leaves(root, &mut leaves);
-    for leaf in leaves {
-        if leaf.start_byte() >= leaf.end_byte() {
-            continue;
-        }
-        let t = text(leaf, src);
-        if t.trim().is_empty() {
-            continue;
-        }
-        let norm = normalize_go(leaf.kind(), t);
-        g.add_token(Token {
-            file: file.to_string(),
-            start_byte: leaf.start_byte(),
-            end_byte: leaf.end_byte(),
-            start_line: leaf.start_position().row + 1,
-            norm,
-        });
-    }
-}
-
-pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
-    let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
-
-    let mut parser = Parser::new();
-    parser.set_language(&lang).expect("load go grammar");
-    let tree = parser.parse(src, None).expect("parse go");
-    let root = tree.root_node();
-
-    let mut g = IrGraph::new();
-
-    // File symbol — fqn is the package directory (parent dir of the path).
-    let file_id = g.add_symbol(Symbol {
+/// Add the File symbol. Its fqn is the package directory (parent dir of the path).
+fn add_file_symbol(g: &mut IrGraph, file: &str, root: Node) -> SymbolId {
+    g.add_symbol(Symbol {
         id: SymbolId(0),
         kind: SymbolKind::File,
         name: file.to_string(),
         fqn: package_dir(file),
-        span: span(file, root),
+        span: walk::span(root, file),
         visibility: Visibility::Unknown,
         confidence: Confidence::Certain,
-    });
+    })
+}
 
-    emit_tokens(&mut g, file, src, root);
-
-    // Import pass: emit a Dependency symbol per import path and an Imports edge from the file.
-    // The query matches both single imports and grouped imports via import_spec.
+/// Emit a Dependency symbol per import path and an Imports edge from the file.
+/// The query matches both single imports and grouped imports via import_spec.
+fn extract_imports(g: &mut IrGraph, file: &str, src: &str, root: Node, file_id: SymbolId) {
+    let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
     let import_q = Query::new(
         &lang,
         r#"(import_spec path: (interpreted_string_literal) @path)"#,
@@ -150,7 +98,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             if cap.index != path_idx {
                 continue;
             }
-            let raw = text(cap.node, src);
+            let raw = walk::node_text(cap.node, src);
             // Strip surrounding double-quotes (or backticks for raw string imports).
             let import_path = raw
                 .strip_prefix('"')
@@ -162,7 +110,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 kind: SymbolKind::Dependency,
                 name: import_path.to_string(),
                 fqn: import_path.to_string(),
-                span: span(file, cap.node),
+                span: walk::span(cap.node, file),
                 visibility: Visibility::Unknown,
                 confidence: Confidence::Certain,
             });
@@ -170,12 +118,17 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 from: file_id,
                 to: dep_id,
                 kind: RefKind::Imports,
-                span: span(file, cap.node),
+                span: walk::span(cap.node, file),
                 confidence: Confidence::Certain,
             });
         }
     }
+}
 
+/// Extract function/method/type definitions: add symbols, Defines edges (from
+/// the file), entrypoint marks, and function complexity.
+fn extract_definitions(g: &mut IrGraph, file: &str, src: &str, root: Node, file_id: SymbolId) {
+    let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
     let query = Query::new(
         &lang,
         r#"
@@ -219,36 +172,55 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             }
         }
 
-        if let (Some(name_node), Some(decl_node)) = (name_node, decl_node) {
-            let name = text(name_node, src).to_string();
-            let id = g.add_symbol(Symbol {
-                id: SymbolId(0),
-                kind,
-                name: name.clone(),
-                fqn: name.clone(),
-                span: span(file, decl_node),
-                visibility: Visibility::Unknown,
-                confidence: Confidence::Certain,
-            });
-            g.add_reference(Reference {
-                from: file_id,
-                to: id,
-                kind: RefKind::Defines,
-                span: span(file, decl_node),
-                confidence: Confidence::Certain,
-            });
-            if kind == SymbolKind::Function {
-                // Entrypoints: main, init, or exported (capitalized).
-                if name == "main" || name == "init" || is_exported_go(&name) {
-                    g.mark_entrypoint(id);
-                }
-                // Cyclomatic complexity.
-                g.set_complexity(id, cyclomatic_go(decl_node));
-            }
-        }
+        let (Some(name_node), Some(decl_node)) = (name_node, decl_node) else {
+            continue;
+        };
+        add_definition(g, file, src, file_id, kind, name_node, decl_node);
     }
+}
 
-    // Second pass: intra-file calls. Build a map of Function name -> SymbolId.
+/// Add one definition symbol with its Defines edge plus, for functions, the
+/// entrypoint mark (main/init/exported) and cyclomatic complexity.
+fn add_definition(
+    g: &mut IrGraph,
+    file: &str,
+    src: &str,
+    file_id: SymbolId,
+    kind: SymbolKind,
+    name_node: Node,
+    decl_node: Node,
+) {
+    let name = walk::node_text(name_node, src).to_string();
+    let id = g.add_symbol(Symbol {
+        id: SymbolId(0),
+        kind,
+        name: name.clone(),
+        fqn: name.clone(),
+        span: walk::span(decl_node, file),
+        visibility: Visibility::Unknown,
+        confidence: Confidence::Certain,
+    });
+    g.add_reference(Reference {
+        from: file_id,
+        to: id,
+        kind: RefKind::Defines,
+        span: walk::span(decl_node, file),
+        confidence: Confidence::Certain,
+    });
+    if kind == SymbolKind::Function {
+        // Entrypoints: main, init, or exported (capitalized).
+        if name == "main" || name == "init" || is_exported_go(&name) {
+            g.mark_entrypoint(id);
+        }
+        g.set_complexity(id, walk::cyclomatic(decl_node, src, &COMPLEXITY_RULES));
+    }
+}
+
+/// Extract calls: intra-file Calls edges (resolved by function name) plus
+/// unresolved cross-file calls. `from` is the enclosing method or the file.
+fn extract_calls(g: &mut IrGraph, file: &str, src: &str, root: Node, file_id: SymbolId) {
+    let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+    // Build a map of Function name -> SymbolId.
     let name_to_id: std::collections::HashMap<String, SymbolId> = g
         .symbols()
         .iter()
@@ -277,7 +249,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let mut call_node = None;
         for cap in m.captures {
             if cap.index == callee_idx {
-                callee_name = Some(text(cap.node, src).to_string());
+                callee_name = Some(walk::node_text(cap.node, src).to_string());
             } else if cap.index == call_idx {
                 call_node = Some(cap.node);
             }
@@ -285,7 +257,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let (Some(callee_name), Some(call_node)) = (callee_name, call_node) else {
             continue;
         };
-        let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
+        let from = enclosing_method_id(call_node, g, file).unwrap_or(file_id);
         if let Some(&callee_id) = name_to_id.get(&callee_name) {
             edges.push((from, callee_id));
         } else {
@@ -301,7 +273,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             from,
             to,
             kind: RefKind::Calls,
-            span: span(file, root),
+            span: walk::span(root, file),
             confidence: Confidence::Likely,
         });
     }
@@ -312,6 +284,26 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     for (from, name) in unresolved {
         g.add_unresolved_call(from, name);
     }
+}
+
+pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
+    let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+
+    let mut parser = Parser::new();
+    parser.set_language(&lang).expect("load go grammar");
+    let tree = parser.parse(src, None).expect("parse go");
+    let root = tree.root_node();
+
+    let mut g = IrGraph::new();
+
+    // File symbol — fqn is the package directory (parent dir of the path).
+    let file_id = add_file_symbol(&mut g, file, root);
+
+    walk::tokenize(&mut g, root, src, file, &NORMALIZE_RULES);
+
+    extract_imports(&mut g, file, src, root, file_id);
+    extract_definitions(&mut g, file, src, root, file_id);
+    extract_calls(&mut g, file, src, root, file_id);
 
     g
 }

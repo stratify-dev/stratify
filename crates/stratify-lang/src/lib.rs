@@ -1,5 +1,7 @@
 use stratify_core::IrGraph;
 
+pub mod walk;
+
 #[derive(Debug)]
 pub enum AdapterError {
     Parse(String),
