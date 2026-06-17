@@ -1,7 +1,10 @@
-use stratify_core::ir::{Span, SymbolId};
+use std::collections::HashMap;
+
+use stratify_core::ir::SymbolId;
 use stratify_core::{
-    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
+    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility,
 };
+use stratify_lang::walk::{self, ComplexityRules, NormalizeRules};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
@@ -12,96 +15,41 @@ pub(crate) fn parser() -> Parser {
     p
 }
 
-fn span(file: &str, node: Node) -> Span {
-    Span {
-        file: file.to_string(),
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: node.start_position().row + 1,
+/// Token normalization rules for Java leaves.
+fn normalize_rules() -> NormalizeRules<'static> {
+    NormalizeRules {
+        identifier_kinds: &["identifier", "type_identifier"],
+        number_kinds: &[
+            "decimal_integer_literal",
+            "hex_integer_literal",
+            "octal_integer_literal",
+            "binary_integer_literal",
+            "decimal_floating_point_literal",
+            "hex_floating_point_literal",
+        ],
+        // `character_literal` is a single leaf.
+        string_kinds: &["character_literal"],
+        // `string_literal` decomposes into quote delimiters plus content
+        // children, so treat it as atomic to keep contents from leaking.
+        atomic_string_kinds: &["string_literal"],
     }
 }
 
-fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    node.utf8_text(src.as_bytes()).unwrap_or("")
-}
-
-fn normalize_java(kind: &str, text: &str) -> String {
-    match kind {
-        "identifier" | "type_identifier" => "ID".to_string(),
-        "decimal_integer_literal"
-        | "hex_integer_literal"
-        | "octal_integer_literal"
-        | "binary_integer_literal"
-        | "decimal_floating_point_literal"
-        | "hex_floating_point_literal" => "NUM".to_string(),
-        "string_literal" | "character_literal" => "STR".to_string(),
-        _ => text.to_string(),
+/// Cyclomatic decision rules for Java.
+fn complexity_rules() -> ComplexityRules<'static> {
+    ComplexityRules {
+        decision_kinds: &[
+            "if_statement",
+            "while_statement",
+            "for_statement",
+            "enhanced_for_statement",
+            "do_statement",
+            "catch_clause",
+            "switch_label",
+            "ternary_expression",
+        ],
+        operator_texts: &["&&", "||"],
     }
-}
-
-fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
-    if node.child_count() == 0 {
-        out.push(node);
-        return;
-    }
-    let mut c = node.walk();
-    for child in node.children(&mut c) {
-        collect_leaves(child, out);
-    }
-}
-
-fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
-    let mut leaves: Vec<Node> = Vec::new();
-    collect_leaves(root, &mut leaves);
-    for leaf in leaves {
-        if leaf.start_byte() >= leaf.end_byte() {
-            continue;
-        }
-        let text = text(leaf, src);
-        if text.trim().is_empty() {
-            continue;
-        }
-        let norm = normalize_java(leaf.kind(), text);
-        g.add_token(Token {
-            file: file.to_string(),
-            start_byte: leaf.start_byte(),
-            end_byte: leaf.end_byte(),
-            start_line: leaf.start_position().row + 1,
-            norm,
-        });
-    }
-}
-
-/// Count decision points in a subtree for cyclomatic complexity.
-fn count_decisions_java(node: Node) -> u32 {
-    let mut count = 0u32;
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        match n.kind() {
-            "if_statement"
-            | "while_statement"
-            | "for_statement"
-            | "enhanced_for_statement"
-            | "do_statement"
-            | "catch_clause"
-            | "switch_label"
-            | "ternary_expression"
-            | "&&"
-            | "||" => {
-                count += 1;
-            }
-            _ => {}
-        }
-        let mut c = n.walk();
-        for child in n.children(&mut c) {
-            stack.push(child);
-        }
-    }
-    count
-}
-
-fn cyclomatic_java(node: Node) -> u32 {
-    1 + count_decisions_java(node)
 }
 
 fn package_name(root: Node, src: &str) -> String {
@@ -114,7 +62,7 @@ fn package_name(root: Node, src: &str) -> String {
     let mut it = cur.matches(&q, root, src.as_bytes());
     if let Some(m) = it.next() {
         if let Some(cap) = m.captures.first() {
-            let t = text(cap.node, src);
+            let t = walk::node_text(cap.node, src);
             // strip leading "package" and trailing ";"
             return t
                 .trim_start_matches("package")
@@ -127,29 +75,14 @@ fn package_name(root: Node, src: &str) -> String {
     String::new()
 }
 
-/// Extract classes and their methods into a per-file graph. The file itself
-/// becomes a `File` symbol; classes and methods get `Defines` edges from it.
-pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
-    let mut parser = parser();
-    let tree = parser.parse(src, None).expect("parse java");
-    let root = tree.root_node();
-
-    let mut g = IrGraph::new();
-
-    // File symbol.
-    let file_id = g.add_symbol(Symbol {
-        id: SymbolId(0),
-        kind: SymbolKind::File,
-        name: file.to_string(),
-        fqn: file.to_string(),
-        span: span(file, root),
-        visibility: Visibility::Unknown,
-        confidence: Confidence::Certain,
-    });
-
-    emit_tokens(&mut g, file, src, root);
-
-    let pkg = package_name(root, src);
+/// Emit File symbol plus a Class/Function symbol (with Defines edge) per
+/// declaration, marking `main` as an entrypoint and recording method complexity.
+fn extract_declarations(g: &mut IrGraph, root: Node, src: &str, file: &str, file_id: SymbolId) {
+    let ctx = DeclCtx {
+        file,
+        file_id,
+        pkg: package_name(root, src),
+    };
 
     let query = Query::new(
         &tree_sitter_java::LANGUAGE.into(),
@@ -160,12 +93,12 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     )
     .expect("valid query");
 
-    let mut cursor = QueryCursor::new();
     let class_name_idx = query.capture_index_for_name("class.name").unwrap();
     let class_node_idx = query.capture_index_for_name("class.node").unwrap();
     let method_name_idx = query.capture_index_for_name("method.name").unwrap();
     let method_node_idx = query.capture_index_for_name("method.node").unwrap();
 
+    let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, root, src.as_bytes());
     while let Some(m) = matches.next() {
         let mut name_node = None;
@@ -185,40 +118,63 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             }
         }
         if let (Some(name_node), Some(decl_node)) = (name_node, decl_node) {
-            let name = text(name_node, src).to_string();
-            let is_main = kind == SymbolKind::Function && name == "main";
-            let fqn = if matches!(kind, SymbolKind::Class) && !pkg.is_empty() {
-                format!("{pkg}.{name}")
-            } else {
-                name.clone()
-            };
-            let id = g.add_symbol(Symbol {
-                id: SymbolId(0),
-                kind,
-                name: name.clone(),
-                fqn,
-                span: span(file, decl_node),
-                visibility: Visibility::Unknown,
-                confidence: Confidence::Certain,
-            });
-            g.add_reference(Reference {
-                from: file_id,
-                to: id,
-                kind: RefKind::Defines,
-                span: span(file, decl_node),
-                confidence: Confidence::Certain,
-            });
-            if is_main {
-                g.mark_entrypoint(id);
-            }
-            if kind == SymbolKind::Function {
-                let cx = cyclomatic_java(decl_node);
-                g.set_complexity(id, cx);
-            }
+            add_declaration(g, src, &ctx, kind, name_node, decl_node);
         }
     }
+}
 
-    // Import pass: emit a Dependency symbol per import and an Imports edge from the file.
+/// File-level context shared across declaration emits.
+struct DeclCtx<'a> {
+    file: &'a str,
+    file_id: SymbolId,
+    pkg: String,
+}
+
+/// Add one class/method symbol and its Defines edge from the file.
+fn add_declaration(
+    g: &mut IrGraph,
+    src: &str,
+    ctx: &DeclCtx,
+    kind: SymbolKind,
+    name_node: Node,
+    decl_node: Node,
+) {
+    let file = ctx.file;
+    let file_id = ctx.file_id;
+    let name = walk::node_text(name_node, src).to_string();
+    let is_main = kind == SymbolKind::Function && name == "main";
+    let fqn = if matches!(kind, SymbolKind::Class) && !ctx.pkg.is_empty() {
+        format!("{}.{name}", ctx.pkg)
+    } else {
+        name.clone()
+    };
+    let id = g.add_symbol(Symbol {
+        id: SymbolId(0),
+        kind,
+        name: name.clone(),
+        fqn,
+        span: walk::span(decl_node, file),
+        visibility: Visibility::Unknown,
+        confidence: Confidence::Certain,
+    });
+    g.add_reference(Reference {
+        from: file_id,
+        to: id,
+        kind: RefKind::Defines,
+        span: walk::span(decl_node, file),
+        confidence: Confidence::Certain,
+    });
+    if is_main {
+        g.mark_entrypoint(id);
+    }
+    if kind == SymbolKind::Function {
+        let cx = walk::cyclomatic(decl_node, src, &complexity_rules());
+        g.set_complexity(id, cx);
+    }
+}
+
+/// Emit a Dependency symbol per import and an Imports edge from the file.
+fn extract_imports(g: &mut IrGraph, root: Node, src: &str, file: &str, file_id: SymbolId) {
     let import_q = Query::new(
         &tree_sitter_java::LANGUAGE.into(),
         r#"(import_declaration (scoped_identifier) @imp)"#,
@@ -230,13 +186,13 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     while let Some(m) = imatches.next() {
         for cap in m.captures {
             if cap.index == imp_idx {
-                let fqn = text(cap.node, src).to_string();
+                let fqn = walk::node_text(cap.node, src).to_string();
                 let dep = g.add_symbol(Symbol {
                     id: SymbolId(0),
                     kind: SymbolKind::Dependency,
                     name: fqn.clone(),
                     fqn,
-                    span: span(file, cap.node),
+                    span: walk::span(cap.node, file),
                     visibility: Visibility::Unknown,
                     confidence: Confidence::Certain,
                 });
@@ -244,16 +200,18 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                     from: file_id,
                     to: dep,
                     kind: RefKind::Imports,
-                    span: span(file, cap.node),
+                    span: walk::span(cap.node, file),
                     confidence: Confidence::Certain,
                 });
             }
         }
     }
+}
 
-    // Second pass: intra-file calls. Resolve a (method_invocation name) against
-    // method names defined in this file. Unresolved calls are skipped in M1.
-    let name_to_id: std::collections::HashMap<String, SymbolId> = g
+/// Resolve intra-file calls. A `(method_invocation name)` resolves against
+/// method names defined in this file; unresolved calls are recorded for M1.
+fn extract_calls(g: &mut IrGraph, root: Node, src: &str, file: &str, file_id: SymbolId) {
+    let name_to_id: HashMap<String, SymbolId> = g
         .symbols()
         .iter()
         .filter(|s| matches!(s.kind, SymbolKind::Function))
@@ -272,7 +230,6 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let call_name_idx = call_query.capture_index_for_name("call.name").unwrap();
     let call_node_idx = call_query.capture_index_for_name("call.node").unwrap();
 
-    // Map each call site to the enclosing method by walking ancestors.
     let mut call_cursor = QueryCursor::new();
     let mut call_matches = call_cursor.matches(&call_query, root, src.as_bytes());
     while let Some(m) = call_matches.next() {
@@ -280,7 +237,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let mut call_node = None;
         for cap in m.captures {
             if cap.index == call_name_idx {
-                callee_name = Some(text(cap.node, src).to_string());
+                callee_name = Some(walk::node_text(cap.node, src).to_string());
             } else if cap.index == call_node_idx {
                 call_node = Some(cap.node);
             }
@@ -289,21 +246,48 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             continue;
         };
         if let Some(&callee_id) = name_to_id.get(&callee_name) {
-            let Some(caller_id) = enclosing_method_id(call_node, &g, file) else {
+            let Some(caller_id) = enclosing_method_id(call_node, g, file) else {
                 continue;
             };
             g.add_reference(Reference {
                 from: caller_id,
                 to: callee_id,
                 kind: RefKind::Calls,
-                span: span(file, call_node),
+                span: walk::span(call_node, file),
                 confidence: Confidence::Likely,
             });
         } else {
-            let from = enclosing_method_id(call_node, &g, file).unwrap_or(file_id);
+            let from = enclosing_method_id(call_node, g, file).unwrap_or(file_id);
             g.add_unresolved_call(from, callee_name.clone());
         }
     }
+}
+
+/// Extract classes and their methods into a per-file graph. The file itself
+/// becomes a `File` symbol; classes and methods get `Defines` edges from it.
+pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
+    let mut parser = parser();
+    let tree = parser.parse(src, None).expect("parse java");
+    let root = tree.root_node();
+
+    let mut g = IrGraph::new();
+
+    // File symbol.
+    let file_id = g.add_symbol(Symbol {
+        id: SymbolId(0),
+        kind: SymbolKind::File,
+        name: file.to_string(),
+        fqn: file.to_string(),
+        span: walk::span(root, file),
+        visibility: Visibility::Unknown,
+        confidence: Confidence::Certain,
+    });
+
+    walk::tokenize(&mut g, root, src, file, &normalize_rules());
+
+    extract_declarations(&mut g, root, src, file, file_id);
+    extract_imports(&mut g, root, src, file, file_id);
+    extract_calls(&mut g, root, src, file, file_id);
 
     g
 }
