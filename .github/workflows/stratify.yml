@@ -1,9 +1,12 @@
 name: Stratify
 
-# Run Stratify on the codebase on every commit and pull request. Report-only:
-# results are uploaded to GitHub code scanning as annotations and the job does
-# not fail the build (`stratify check` defaults to `--fail-on never`). Tighten
-# to a gate later by adding `--fail-on warning` once findings are triaged.
+# Run Stratify on the codebase on every commit and pull request, using the
+# published prebuilt binary via our own Marketplace action (dogfooding it) —
+# no compile here. Report-only: results go to GitHub code scanning as
+# annotations and the job does not fail the build (`fail-on: never`). Current
+# code is compiled and tested by ci.yml; this scan reflects the latest released
+# Stratify. Tighten to a gate later with `fail-on: warning` once a baseline is
+# in place.
 on:
   push:
   pull_request:
@@ -18,23 +21,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Installs the prebuilt `stratify` binary (downloaded from the latest
+      # release) and runs the gate report-only. No Rust toolchain, no build.
+      - uses: stratify-dev/stratify@v0.4.0
+        with:
+          fail-on: never
 
-      # Build the binary from the current commit so the scan reflects the code
-      # being committed (not a released version).
-      - name: Build stratify
-        run: cargo build -p stratify-cli --locked
-
-      # Readable summary in the job log.
-      - name: Scan (summary)
-        run: ./target/debug/stratify check . --format human
-
-      # SARIF for GitHub code scanning annotations.
+      # Reuse the installed binary to emit SARIF for code scanning.
       - name: Scan (SARIF)
-        run: ./target/debug/stratify check . --format sarif > stratify.sarif
+        run: stratify check . --format sarif > stratify.sarif
 
       - name: Upload to code scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: stratify.sarif
           category: stratify

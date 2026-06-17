@@ -184,7 +184,7 @@ Upload it to GitHub code scanning:
   with:
     fail-on: never
 - run: stratify check . --format sarif > stratify.sarif
-- uses: github/codeql-action/upload-sarif@v3
+- uses: github/codeql-action/upload-sarif@v4
   with:
     sarif_file: stratify.sarif
 ```
