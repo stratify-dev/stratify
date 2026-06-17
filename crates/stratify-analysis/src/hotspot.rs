@@ -2,9 +2,17 @@ use std::collections::HashMap;
 use stratify_core::{Confidence, Finding, IrGraph, Severity, SymbolKind};
 
 /// Hotspot = function complexity x churn of its file. Flags functions whose
-/// score exceeds `threshold`. Churn is supplied by the caller (the CLI reads
-/// it from git), keyed by the same file string the IR uses in spans.
-pub fn analyze(graph: &IrGraph, churn: &HashMap<String, u32>, threshold: u32) -> Vec<Finding> {
+/// score exceeds `threshold`, skipping any below `complexity_floor` (a simple
+/// function is not a hotspot no matter how often it changes). Churn is supplied
+/// by the caller (the CLI reads it from git), keyed by the same file string the
+/// IR uses in spans. Emitted as Info: an advisory prioritization signal, not a
+/// gate-failing defect.
+pub fn analyze(
+    graph: &IrGraph,
+    churn: &HashMap<String, u32>,
+    threshold: u32,
+    complexity_floor: u32,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     for s in graph.symbols() {
         if !matches!(s.kind, SymbolKind::Function) {
@@ -13,6 +21,9 @@ pub fn analyze(graph: &IrGraph, churn: &HashMap<String, u32>, threshold: u32) ->
         let Some(cx) = graph.complexity_of(s.id) else {
             continue;
         };
+        if cx < complexity_floor {
+            continue;
+        }
         let ch = churn.get(&s.span.file).copied().unwrap_or(0);
         let score = cx.saturating_mul(ch);
         if score <= threshold {
@@ -20,7 +31,7 @@ pub fn analyze(graph: &IrGraph, churn: &HashMap<String, u32>, threshold: u32) ->
         }
         findings.push(Finding {
             rule: "hotspot".into(),
-            severity: Severity::Warning,
+            severity: Severity::Info,
             message: format!(
                 "hotspot: `{}` complexity {cx} x churn {ch} = {score}",
                 s.name
@@ -64,10 +75,20 @@ mod tests {
         let mut churn = HashMap::new();
         churn.insert("a.rb".to_string(), 6); // 11*6 = 66 > 50
         churn.insert("b.rb".to_string(), 1); // 11*1 = 11 <= 50
-        let findings = analyze(&g, &churn, 50);
+        let findings = analyze(&g, &churn, 50, 10);
         assert_eq!(findings.len(), 1);
         assert!(findings[0].message.contains("hot"));
         assert!(findings[0].message.contains("66"));
+        assert_eq!(findings[0].severity, Severity::Info);
+    }
+
+    #[test]
+    fn low_complexity_high_churn_is_not_a_hotspot() {
+        let mut g = IrGraph::new();
+        func(&mut g, "simple", "a.rb", 5); // below floor 10
+        let mut churn = HashMap::new();
+        churn.insert("a.rb".to_string(), 100); // 5*100 = 500 > 50 but cx < floor
+        assert!(analyze(&g, &churn, 50, 10).is_empty());
     }
 
     #[test]
@@ -75,7 +96,7 @@ mod tests {
         let mut g = IrGraph::new();
         func(&mut g, "complex", "a.rb", 30);
         let churn = HashMap::new(); // no churn data -> score 0
-        assert!(analyze(&g, &churn, 50).is_empty());
+        assert!(analyze(&g, &churn, 50, 10).is_empty());
     }
 
     #[test]
@@ -98,6 +119,6 @@ mod tests {
         });
         let mut churn = HashMap::new();
         churn.insert("a.rb".to_string(), 100);
-        assert!(analyze(&g, &churn, 50).is_empty());
+        assert!(analyze(&g, &churn, 50, 10).is_empty());
     }
 }
