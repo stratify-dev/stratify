@@ -180,8 +180,26 @@ fn extract_calls(g: &mut IrGraph, root: Node, src: &str, file: &str, file_id: Sy
     let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
     let mut unresolved: Vec<(SymbolId, String)> = Vec::new();
 
-    collect_explicit_calls(g, root, src, file, file_id, &name_to_id, &mut edges, &mut unresolved);
-    collect_bare_calls(g, root, src, file, file_id, &name_to_id, &mut edges, &mut unresolved);
+    collect_explicit_calls(
+        g,
+        root,
+        src,
+        file,
+        file_id,
+        &name_to_id,
+        &mut edges,
+        &mut unresolved,
+    );
+    collect_bare_calls(
+        g,
+        root,
+        src,
+        file,
+        file_id,
+        &name_to_id,
+        &mut edges,
+        &mut unresolved,
+    );
 
     // Deduplicate and emit Calls edges.
     edges.sort_unstable();

@@ -193,7 +193,14 @@ fn recover_macro_calls(
 
 /// Run the symbol query: define File-relative Function/Class symbols, mark
 /// entrypoints, and record cyclomatic complexity for functions.
-fn extract_symbols(g: &mut IrGraph, lang: &tree_sitter::Language, root: Node, src: &str, file: &str, file_id: SymbolId) {
+fn extract_symbols(
+    g: &mut IrGraph,
+    lang: &tree_sitter::Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+) {
     let query = Query::new(
         lang,
         r#"
@@ -567,7 +574,10 @@ impl S { fn inherent_unused(&self) {} }
                 .any(|r| matches!(r.kind, RefKind::Calls) && r.to == to)
         };
         assert!(has_call_to(id("a")), "expected recovered call to a");
-        assert!(has_call_to(id("b")), "expected recovered call to b (nested)");
+        assert!(
+            has_call_to(id("b")),
+            "expected recovered call to b (nested)"
+        );
     }
 
     #[test]

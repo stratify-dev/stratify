@@ -1,8 +1,8 @@
 use stratify_core::ir::SymbolId;
-use stratify_core::{
-    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility,
+use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
+use stratify_lang::walk::{
+    cyclomatic, enclosing, node_text, span, tokenize, ComplexityRules, NormalizeRules,
 };
-use stratify_lang::walk::{cyclomatic, enclosing, node_text, span, tokenize, ComplexityRules, NormalizeRules};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
@@ -137,7 +137,14 @@ fn add_file_symbol(g: &mut IrGraph, file: &str, root: Node) -> SymbolId {
 /// Extract class/function/method/arrow declarations as symbols, with Defines
 /// edges from the file, entrypoint marking for exports, and complexity for
 /// functions.
-fn extract_declarations(g: &mut IrGraph, lang: &Language, root: Node, src: &str, file: &str, file_id: SymbolId) {
+fn extract_declarations(
+    g: &mut IrGraph,
+    lang: &Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+) {
     let query = Query::new(
         lang,
         r#"
@@ -222,7 +229,14 @@ fn extract_declarations(g: &mut IrGraph, lang: &Language, root: Node, src: &str,
 }
 
 /// Resolve relative import specifiers to Dependency symbols + Imports edges.
-fn extract_imports(g: &mut IrGraph, lang: &Language, root: Node, src: &str, file: &str, file_id: SymbolId) {
+fn extract_imports(
+    g: &mut IrGraph,
+    lang: &Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+) {
     let import_q = Query::new(
         lang,
         r#"(import_statement source: (string (string_fragment) @spec))"#,
@@ -262,7 +276,14 @@ fn extract_imports(g: &mut IrGraph, lang: &Language, root: Node, src: &str, file
 
 /// Collect intra-file Calls edges and unresolved (cross-file) calls, then emit
 /// them deduplicated into the graph.
-fn extract_calls(g: &mut IrGraph, lang: &Language, root: Node, src: &str, file: &str, file_id: SymbolId) {
+fn extract_calls(
+    g: &mut IrGraph,
+    lang: &Language,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+) {
     // Build a map of Function name -> SymbolId.
     let name_to_id: std::collections::HashMap<String, SymbolId> = g
         .symbols()

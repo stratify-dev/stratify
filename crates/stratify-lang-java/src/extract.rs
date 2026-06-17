@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use stratify_core::ir::SymbolId;
-use stratify_core::{
-    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility,
-};
+use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
 use stratify_lang::walk::{self, ComplexityRules, NormalizeRules};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
