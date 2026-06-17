@@ -152,13 +152,13 @@ Drop Stratify into any workflow as a gate:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@v0.3.1
+- uses: stratify-dev/stratify@v0.4.0
   with:
     path: .
     fail-on: warning
 ```
 
-The step fails the job when at least one finding meets or exceeds the `fail-on` threshold. Pin to a released tag for stable runs, for example `@v0.3.1`. `@main` tracks the latest. The Action downloads a prebuilt binary, so it starts in seconds.
+The step fails the job when at least one finding meets or exceeds the `fail-on` threshold. Pin to a released tag for stable runs, for example `@v0.4.0`. `@main` tracks the latest. The Action downloads a prebuilt binary, so it starts in seconds.
 
 ### Action inputs
 
@@ -180,7 +180,7 @@ Upload it to GitHub code scanning:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@v0.3.1
+- uses: stratify-dev/stratify@v0.4.0
   with:
     fail-on: never
 - run: stratify check . --format sarif > stratify.sarif
