@@ -154,6 +154,7 @@ pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStat
         &graph,
         &churn,
         HOTSPOT_THRESHOLD,
+        COMPLEXITY_THRESHOLD,
     ));
     findings.extend(stratify_analysis::cycles::analyze(&graph));
     let boundary_config = load_boundary_config(root);
