@@ -1,7 +1,6 @@
-use stratify_core::ir::{Span, SymbolId};
-use stratify_core::{
-    Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Token, Visibility,
-};
+use stratify_core::ir::SymbolId;
+use stratify_core::{Confidence, IrGraph, RefKind, Reference, Symbol, SymbolKind, Visibility};
+use stratify_lang::walk::{self, ComplexityRules, NormalizeRules};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
@@ -12,94 +11,46 @@ pub(crate) fn parser() -> Parser {
     p
 }
 
-fn span(file: &str, node: Node) -> Span {
-    Span {
-        file: file.to_string(),
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_line: node.start_position().row + 1,
+/// Token normalization rules for Ruby leaves.
+fn normalize_rules() -> NormalizeRules<'static> {
+    NormalizeRules {
+        identifier_kinds: &[
+            "identifier",
+            "constant",
+            "instance_variable",
+            "global_variable",
+            "class_variable",
+        ],
+        number_kinds: &["integer", "float"],
+        // `simple_symbol` is a single leaf.
+        string_kinds: &["simple_symbol"],
+        // A Ruby `string` decomposes into quote delimiters plus a
+        // `string_content` child, so treat it as atomic to keep contents
+        // from leaking as a separate token.
+        atomic_string_kinds: &["string"],
     }
 }
 
-fn text<'a>(node: Node, src: &'a str) -> &'a str {
-    node.utf8_text(src.as_bytes()).unwrap_or("")
-}
-
-fn normalize_ruby(kind: &str, text: &str) -> String {
-    match kind {
-        "identifier" | "constant" | "instance_variable" | "global_variable" | "class_variable" => {
-            "ID".to_string()
-        }
-        "integer" | "float" => "NUM".to_string(),
-        "string_content" | "string" | "simple_symbol" => "STR".to_string(),
-        _ => text.to_string(),
+/// Cyclomatic decision rules for Ruby.
+fn complexity_rules() -> ComplexityRules<'static> {
+    ComplexityRules {
+        decision_kinds: &[
+            "if",
+            "elsif",
+            "unless",
+            "while",
+            "until",
+            "for",
+            "when",
+            "rescue",
+            "conditional",
+            "if_modifier",
+            "unless_modifier",
+            "while_modifier",
+            "until_modifier",
+        ],
+        operator_texts: &["&&", "||", "and", "or"],
     }
-}
-
-fn collect_leaves<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
-    if node.child_count() == 0 {
-        out.push(node);
-        return;
-    }
-    let mut c = node.walk();
-    for child in node.children(&mut c) {
-        collect_leaves(child, out);
-    }
-}
-
-fn emit_tokens(g: &mut IrGraph, file: &str, src: &str, root: Node) {
-    let mut leaves: Vec<Node> = Vec::new();
-    collect_leaves(root, &mut leaves);
-    for leaf in leaves {
-        if leaf.start_byte() >= leaf.end_byte() {
-            continue;
-        }
-        let text = text(leaf, src);
-        if text.trim().is_empty() {
-            continue;
-        }
-        let norm = normalize_ruby(leaf.kind(), text);
-        g.add_token(Token {
-            file: file.to_string(),
-            start_byte: leaf.start_byte(),
-            end_byte: leaf.end_byte(),
-            start_line: leaf.start_position().row + 1,
-            norm,
-        });
-    }
-}
-
-fn count_decisions_ruby(node: Node) -> u32 {
-    let mut count = 0u32;
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if n.is_named() {
-            match n.kind() {
-                "if" | "elsif" | "unless" | "while" | "until" | "for" | "when" | "rescue"
-                | "conditional" | "if_modifier" | "unless_modifier" | "while_modifier"
-                | "until_modifier" => {
-                    count += 1;
-                }
-                _ => {}
-            }
-        } else {
-            match n.kind() {
-                "&&" | "||" | "and" | "or" => {
-                    count += 1;
-                }
-                _ => {}
-            }
-        }
-        let mut c = n.walk();
-        for child in n.children(&mut c) {
-            stack.push(child);
-        }
-    }
-    count
-}
-
-fn cyclomatic_ruby(node: Node) -> u32 {
-    1 + count_decisions_ruby(node)
 }
 
 fn resolve_require_relative(importer_file: &str, arg: &str) -> String {
@@ -125,28 +76,9 @@ fn resolve_require_relative(importer_file: &str, arg: &str) -> String {
     p
 }
 
-/// Extract modules, classes, and methods into a per-file graph. The file itself
-/// becomes a `File` symbol; all top-level and nested definitions get `Defines` edges from it.
-pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
-    let mut parser = parser();
-    let tree = parser.parse(src, None).expect("parse ruby");
-    let root = tree.root_node();
-
-    let mut g = IrGraph::new();
-
-    // File symbol.
-    let file_id = g.add_symbol(Symbol {
-        id: SymbolId(0),
-        kind: SymbolKind::File,
-        name: file.to_string(),
-        fqn: file.to_string(),
-        span: span(file, root),
-        visibility: Visibility::Unknown,
-        confidence: Confidence::Certain,
-    });
-
-    emit_tokens(&mut g, file, src, root);
-
+/// Emit a Module/Class/Function symbol (with a Defines edge from the file) per
+/// declaration, recording method complexity.
+fn extract_declarations(g: &mut IrGraph, root: Node, src: &str, file: &str, file_id: SymbolId) {
     let query = Query::new(
         &tree_sitter_ruby::LANGUAGE.into(),
         r#"
@@ -157,7 +89,6 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     )
     .expect("valid ruby query");
 
-    let mut cursor = QueryCursor::new();
     let method_name_idx = query.capture_index_for_name("method.name").unwrap();
     let method_node_idx = query.capture_index_for_name("method.node").unwrap();
     let class_name_idx = query.capture_index_for_name("class.name").unwrap();
@@ -165,6 +96,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let module_name_idx = query.capture_index_for_name("module.name").unwrap();
     let module_node_idx = query.capture_index_for_name("module.node").unwrap();
 
+    let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, root, src.as_bytes());
     while let Some(m) = matches.next() {
         let mut name_node = None;
@@ -189,34 +121,55 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             }
         }
         if let (Some(name_node), Some(decl_node)) = (name_node, decl_node) {
-            let name = text(name_node, src).to_string();
-            let id = g.add_symbol(Symbol {
-                id: SymbolId(0),
-                kind,
-                name: name.clone(),
-                fqn: name,
-                span: span(file, decl_node),
-                visibility: Visibility::Unknown,
-                confidence: Confidence::Certain,
-            });
-            g.add_reference(Reference {
-                from: file_id,
-                to: id,
-                kind: RefKind::Defines,
-                span: span(file, decl_node),
-                confidence: Confidence::Certain,
-            });
-            if kind == SymbolKind::Function {
-                let cx = cyclomatic_ruby(decl_node);
-                g.set_complexity(id, cx);
-            }
+            add_declaration(g, src, file, file_id, kind, name_node, decl_node);
         }
     }
+}
 
-    // Mark the file as an entrypoint (Ruby top-level code is the execution entry).
-    g.mark_entrypoint(file_id);
+/// Add one module/class/method symbol and its Defines edge from the file.
+fn add_declaration(
+    g: &mut IrGraph,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+    kind: SymbolKind,
+    name_node: Node,
+    decl_node: Node,
+) {
+    let name = walk::node_text(name_node, src).to_string();
+    let id = g.add_symbol(Symbol {
+        id: SymbolId(0),
+        kind,
+        name: name.clone(),
+        fqn: name,
+        span: walk::span(decl_node, file),
+        visibility: Visibility::Unknown,
+        confidence: Confidence::Certain,
+    });
+    g.add_reference(Reference {
+        from: file_id,
+        to: id,
+        kind: RefKind::Defines,
+        span: walk::span(decl_node, file),
+        confidence: Confidence::Certain,
+    });
+    if kind == SymbolKind::Function {
+        let cx = walk::cyclomatic(decl_node, src, &complexity_rules());
+        g.set_complexity(id, cx);
+    }
+}
 
-    // Second pass: intra-file calls. Collect all Function symbols.
+/// Resolve intra-file calls and record cross-file misses.
+///
+/// Two passes feed a shared edge/unresolved set:
+///   A. explicit calls like `foo(args)` or `recv.foo`.
+///   B. bare identifier command calls like `greet` (no parens, no receiver).
+///
+/// A bare Ruby identifier is syntactically indistinguishable from a local-variable
+/// read. We record in-file hits as Calls edges and misses as unresolved calls.
+/// The cross_file_calls pass drops any unresolved name with no matching repo
+/// function, so variable names and builtins are silently ignored.
+fn extract_calls(g: &mut IrGraph, root: Node, src: &str, file: &str, file_id: SymbolId) {
     let name_to_id: std::collections::HashMap<String, SymbolId> = g
         .symbols()
         .iter()
@@ -224,24 +177,59 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         .map(|s| (s.name.clone(), s.id))
         .collect();
 
-    // Query A: explicit calls like foo(args) or recv.foo.
+    let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
+    let mut unresolved: Vec<(SymbolId, String)> = Vec::new();
+
+    collect_explicit_calls(g, root, src, file, file_id, &name_to_id, &mut edges, &mut unresolved);
+    collect_bare_calls(g, root, src, file, file_id, &name_to_id, &mut edges, &mut unresolved);
+
+    // Deduplicate and emit Calls edges.
+    edges.sort_unstable();
+    edges.dedup();
+    for (from, to) in edges {
+        g.add_reference(Reference {
+            from,
+            to,
+            kind: RefKind::Calls,
+            span: walk::span(root, file),
+            confidence: Confidence::Likely,
+        });
+    }
+
+    // Record unresolved (cross-file) calls.
+    unresolved.sort_unstable();
+    unresolved.dedup();
+    for (from, name) in unresolved {
+        g.add_unresolved_call(from, name);
+    }
+}
+
+/// Pass A: explicit calls like `foo(args)` or `recv.foo`.
+#[allow(clippy::too_many_arguments)]
+fn collect_explicit_calls(
+    g: &IrGraph,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+    name_to_id: &std::collections::HashMap<String, SymbolId>,
+    edges: &mut Vec<(SymbolId, SymbolId)>,
+    unresolved: &mut Vec<(SymbolId, String)>,
+) {
     let call_query = Query::new(
         &tree_sitter_ruby::LANGUAGE.into(),
         r#"(call method: (identifier) @callee)"#,
     )
     .expect("valid ruby call query");
-
     let callee_idx = call_query.capture_index_for_name("callee").unwrap();
 
     let mut call_cursor = QueryCursor::new();
     let mut call_matches = call_cursor.matches(&call_query, root, src.as_bytes());
-    let mut edges: Vec<(SymbolId, SymbolId)> = Vec::new();
-    let mut unresolved: Vec<(SymbolId, String)> = Vec::new();
     while let Some(m) = call_matches.next() {
         for cap in m.captures {
             if cap.index == callee_idx {
-                let callee_name = text(cap.node, src);
-                let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
+                let callee_name = walk::node_text(cap.node, src);
+                let from = enclosing_method_id(cap.node, g, file).unwrap_or(file_id);
                 if let Some(&callee_id) = name_to_id.get(callee_name) {
                     edges.push((from, callee_id));
                 } else {
@@ -250,17 +238,23 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             }
         }
     }
+}
 
-    // Query B: bare identifier command calls like `greet` (no parens, no receiver).
-    //
-    // A bare Ruby identifier is syntactically indistinguishable from a local-variable
-    // read. We record in-file hits as Calls edges and misses as unresolved calls.
-    // The cross_file_calls pass drops any unresolved name that has no matching repo
-    // function, so variable names and builtins are silently ignored.
-    // We skip identifiers that are definition sites or parameter nodes.
+/// Pass B: bare identifier command calls like `greet` (no parens, no receiver).
+/// We skip identifiers that are definition sites or parameter nodes.
+#[allow(clippy::too_many_arguments)]
+fn collect_bare_calls(
+    g: &IrGraph,
+    root: Node,
+    src: &str,
+    file: &str,
+    file_id: SymbolId,
+    name_to_id: &std::collections::HashMap<String, SymbolId>,
+    edges: &mut Vec<(SymbolId, SymbolId)>,
+    unresolved: &mut Vec<(SymbolId, String)>,
+) {
     let ident_query = Query::new(&tree_sitter_ruby::LANGUAGE.into(), r#"(identifier) @ident"#)
         .expect("valid ruby ident query");
-
     let ident_idx = ident_query.capture_index_for_name("ident").unwrap();
 
     let mut ident_cursor = QueryCursor::new();
@@ -268,7 +262,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     while let Some(m) = ident_matches.next() {
         for cap in m.captures {
             if cap.index == ident_idx {
-                let callee_name = text(cap.node, src);
+                let callee_name = walk::node_text(cap.node, src);
                 // Skip definition sites and parameter nodes.
                 let parent_kind = cap.node.parent().map(|p| p.kind()).unwrap_or("");
                 if matches!(
@@ -277,7 +271,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
                 ) {
                     continue;
                 }
-                let from = enclosing_method_id(cap.node, &g, file).unwrap_or(file_id);
+                let from = enclosing_method_id(cap.node, g, file).unwrap_or(file_id);
                 if let Some(&callee_id) = name_to_id.get(callee_name) {
                     edges.push((from, callee_id));
                 } else {
@@ -288,28 +282,10 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             }
         }
     }
+}
 
-    // Deduplicate and emit Calls edges.
-    edges.sort_unstable();
-    edges.dedup();
-    for (from, to) in edges {
-        g.add_reference(Reference {
-            from,
-            to,
-            kind: RefKind::Calls,
-            span: span(file, root),
-            confidence: Confidence::Likely,
-        });
-    }
-
-    // Record unresolved (cross-file) calls from Query A misses.
-    unresolved.sort_unstable();
-    unresolved.dedup();
-    for (from, name) in unresolved {
-        g.add_unresolved_call(from, name);
-    }
-
-    // Import pass: emit a Dependency symbol per require_relative and an Imports edge from the file.
+/// Emit a Dependency symbol per `require_relative` and an Imports edge from the file.
+fn extract_imports(g: &mut IrGraph, root: Node, src: &str, file: &str, file_id: SymbolId) {
     let req_q = Query::new(
         &tree_sitter_ruby::LANGUAGE.into(),
         r#"(call
@@ -325,7 +301,7 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
         let mut is_req = false;
         let mut arg_node = None;
         for cap in mt.captures {
-            if cap.index == m_idx && text(cap.node, src) == "require_relative" {
+            if cap.index == m_idx && walk::node_text(cap.node, src) == "require_relative" {
                 is_req = true;
             } else if cap.index == arg_idx {
                 arg_node = Some(cap.node);
@@ -335,13 +311,13 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             continue;
         }
         let Some(arg_node) = arg_node else { continue };
-        let key = resolve_require_relative(file, text(arg_node, src));
+        let key = resolve_require_relative(file, walk::node_text(arg_node, src));
         let dep = g.add_symbol(Symbol {
             id: SymbolId(0),
             kind: SymbolKind::Dependency,
             name: key.clone(),
             fqn: key,
-            span: span(file, arg_node),
+            span: walk::span(arg_node, file),
             visibility: Visibility::Unknown,
             confidence: Confidence::Certain,
         });
@@ -349,10 +325,41 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             from: file_id,
             to: dep,
             kind: RefKind::Imports,
-            span: span(file, arg_node),
+            span: walk::span(arg_node, file),
             confidence: Confidence::Certain,
         });
     }
+}
+
+/// Extract modules, classes, and methods into a per-file graph. The file itself
+/// becomes a `File` symbol; all top-level and nested definitions get `Defines` edges from it.
+pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
+    let mut parser = parser();
+    let tree = parser.parse(src, None).expect("parse ruby");
+    let root = tree.root_node();
+
+    let mut g = IrGraph::new();
+
+    // File symbol.
+    let file_id = g.add_symbol(Symbol {
+        id: SymbolId(0),
+        kind: SymbolKind::File,
+        name: file.to_string(),
+        fqn: file.to_string(),
+        span: walk::span(root, file),
+        visibility: Visibility::Unknown,
+        confidence: Confidence::Certain,
+    });
+
+    walk::tokenize(&mut g, root, src, file, &normalize_rules());
+
+    extract_declarations(&mut g, root, src, file, file_id);
+
+    // Mark the file as an entrypoint (Ruby top-level code is the execution entry).
+    g.mark_entrypoint(file_id);
+
+    extract_calls(&mut g, root, src, file, file_id);
+    extract_imports(&mut g, root, src, file, file_id);
 
     g
 }
