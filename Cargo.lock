@@ -1212,6 +1212,9 @@ name = "stratify-lang"
 version = "0.2.0"
 dependencies = [
  "stratify-core",
+ "streaming-iterator",
+ "tree-sitter",
+ "tree-sitter-go",
 ]
 
 [[package]]

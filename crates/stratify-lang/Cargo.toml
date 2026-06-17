@@ -6,3 +6,9 @@ license.workspace = true
 
 [dependencies]
 stratify-core = { path = "../stratify-core" }
+tree-sitter = { workspace = true }
+streaming-iterator = { workspace = true }
+
+[dev-dependencies]
+tree-sitter-go = { workspace = true }
+streaming-iterator = { workspace = true }
