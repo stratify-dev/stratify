@@ -70,6 +70,47 @@ pub fn cross_file_calls(graph: &mut IrGraph) {
     }
 }
 
+/// Promote unambiguous intra-file Calls edges (Likely -> Certain): when a call
+/// targets the unique function of that name in the same file, it is a real,
+/// unambiguous use, so the target is genuinely used (not "possibly unused").
+/// Never touches cross-file edges, preserving the never-false-clear guarantee.
+pub fn promote_intra_file_calls(graph: &mut IrGraph) {
+    // (file, function name) -> count of Function symbols
+    let mut counts: HashMap<(String, String), usize> = HashMap::new();
+    for s in graph.symbols() {
+        if matches!(s.kind, SymbolKind::Function) {
+            *counts
+                .entry((s.span.file.clone(), s.name.clone()))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut promote: Vec<usize> = Vec::new();
+    for (i, r) in graph.references().iter().enumerate() {
+        if !matches!(r.kind, RefKind::Calls) || r.confidence != Confidence::Likely {
+            continue;
+        }
+        let (Some(from), Some(to)) = (graph.symbol(r.from), graph.symbol(r.to)) else {
+            continue;
+        };
+        if to.kind != SymbolKind::Function {
+            continue;
+        }
+        if from.span.file != to.span.file {
+            continue; // intra-file only
+        }
+        if counts
+            .get(&(to.span.file.clone(), to.name.clone()))
+            .copied()
+            == Some(1)
+        {
+            promote.push(i);
+        }
+    }
+    for i in promote {
+        graph.set_reference_confidence(i, Confidence::Certain);
+    }
+}
+
 /// Resolve Go imports: rewrite each Dependency reached by an `Imports` edge
 /// from a `.go` file so its name becomes the longest in-repo Go package dir
 /// that is a suffix of the raw import path. External imports (no matching
@@ -207,6 +248,52 @@ mod tests {
             .filter(|r| matches!(r.kind, RefKind::Calls) && r.from == caller && r.to == target)
             .count();
         assert_eq!(count, 1, "should not duplicate the existing edge");
+    }
+
+    fn likely_call(g: &mut IrGraph, from: SymbolId, to: SymbolId, file: &str) {
+        g.add_reference(Reference {
+            from,
+            to,
+            kind: RefKind::Calls,
+            span: Span {
+                file: file.into(),
+                start_byte: 0,
+                end_byte: 1,
+                start_line: 1,
+            },
+            confidence: Confidence::Likely,
+        });
+    }
+
+    #[test]
+    fn promotes_unique_intra_file_call() {
+        let mut g = IrGraph::new();
+        let main = func(&mut g, "main", "a.rb");
+        let helper = func(&mut g, "helper", "a.rb");
+        likely_call(&mut g, main, helper, "a.rb");
+        promote_intra_file_calls(&mut g);
+        assert_eq!(g.references()[0].confidence, Confidence::Certain);
+    }
+
+    #[test]
+    fn keeps_ambiguous_same_name_intra_file_likely() {
+        let mut g = IrGraph::new();
+        let main = func(&mut g, "main", "a.rb");
+        let helper1 = func(&mut g, "helper", "a.rb");
+        let _helper2 = func(&mut g, "helper", "a.rb"); // two functions share the name
+        likely_call(&mut g, main, helper1, "a.rb");
+        promote_intra_file_calls(&mut g);
+        assert_eq!(g.references()[0].confidence, Confidence::Likely);
+    }
+
+    #[test]
+    fn does_not_promote_cross_file_call() {
+        let mut g = IrGraph::new();
+        let caller = func(&mut g, "caller", "a.rb");
+        let target = func(&mut g, "target", "b.rb"); // different file, unique name
+        likely_call(&mut g, caller, target, "<resolved>");
+        promote_intra_file_calls(&mut g);
+        assert_eq!(g.references()[0].confidence, Confidence::Likely);
     }
 
     #[test]

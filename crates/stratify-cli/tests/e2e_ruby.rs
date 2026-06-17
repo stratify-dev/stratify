@@ -15,9 +15,10 @@ fn sample_ruby_reports_unused_methods() {
     // never_called is never invoked -> unused (warning).
     assert!(stdout.contains("never_called"), "stdout: {stdout}");
     assert!(stdout.contains("warn"), "stdout: {stdout}");
-    // helper is called at top level via a Likely edge -> possibly unused (info).
+    // helper is called at top level via an unambiguous intra-file edge that B6
+    // promotes to Certain -> genuinely used, so it is NOT reported.
     assert!(
-        stdout.contains("helper") && stdout.contains("possibly unused"),
-        "stdout: {stdout}"
+        !stdout.contains("helper"),
+        "helper is used via a promoted intra-file call and must not be flagged: {stdout}"
     );
 }
