@@ -171,6 +171,98 @@ fn has_test_attribute(node: Node, src: &str) -> bool {
     false
 }
 
+/// Find the `function_item` that lexically encloses `node` by walking ancestors.
+/// Returns its symbol id via the same span-matching used by `enclosing_method_id`.
+/// Used for macro-recovered calls, whose callee identifiers live inside an opaque
+/// `token_tree` that the normal `enclosing_method_id` byte-range lookup also handles,
+/// but walking ancestors keeps intent explicit for the macro pass.
+fn enclosing_fn_id(node: Node, g: &IrGraph, file: &str) -> Option<SymbolId> {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.kind() == "function_item" {
+            return enclosing_method_id(n, g, file);
+        }
+        cur = n.parent();
+    }
+    None
+}
+
+/// True if `node` is the "open paren" that follows a callee identifier inside a
+/// macro token stream. tree-sitter-rust represents `foo()` inside a macro as an
+/// `identifier` followed by a `token_tree` whose first child is `(` (the args),
+/// not by a bare `(` token. Accept both forms to be safe.
+fn starts_call_args(node: Node) -> bool {
+    if node.kind() == "(" {
+        return true;
+    }
+    if node.kind() == "token_tree" {
+        return node.child(0).map(|c| c.kind() == "(").unwrap_or(false);
+    }
+    false
+}
+
+/// Scan a macro `token_tree` (recursing into nested `token_tree`s) for the
+/// conservative `identifier` immediately-followed-by-call-args pattern, collecting
+/// each such identifier's text as a recovered callee name.
+fn collect_macro_callees<'a>(tree: Node<'a>, src: &'a str, out: &mut Vec<String>) {
+    let mut c = tree.walk();
+    let children: Vec<Node> = tree.children(&mut c).collect();
+    for (i, child) in children.iter().enumerate() {
+        if child.kind() == "identifier" {
+            if let Some(next) = children.get(i + 1) {
+                if starts_call_args(*next) {
+                    out.push(text(*child, src).to_string());
+                }
+            }
+        }
+        if child.kind() == "token_tree" {
+            collect_macro_callees(*child, src, out);
+        }
+    }
+}
+
+/// B5 macro-call recovery pass: walk every `macro_invocation`, recover call-like
+/// identifiers from its `token_tree`, and append resolved/unresolved calls to the
+/// shared buffers so they dedup and emit alongside real calls (Confidence::Likely).
+#[allow(clippy::too_many_arguments)]
+fn recover_macro_calls(
+    root: Node,
+    src: &str,
+    g: &IrGraph,
+    file: &str,
+    file_id: SymbolId,
+    name_to_id: &std::collections::HashMap<String, SymbolId>,
+    edges: &mut Vec<(SymbolId, SymbolId)>,
+    unresolved: &mut Vec<(SymbolId, String)>,
+) {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "macro_invocation" {
+            // The macro's own name is the `macro:` field, not inside the
+            // token_tree, so scanning only the token_tree never picks it up. The
+            // token_tree child carries no field name, so find it by kind.
+            let mut tc = n.walk();
+            let tt = n.children(&mut tc).find(|c| c.kind() == "token_tree");
+            if let Some(tt) = tt {
+                let from = enclosing_fn_id(n, g, file).unwrap_or(file_id);
+                let mut callees = Vec::new();
+                collect_macro_callees(tt, src, &mut callees);
+                for name in callees {
+                    if let Some(&callee_id) = name_to_id.get(&name) {
+                        edges.push((from, callee_id));
+                    } else {
+                        unresolved.push((from, name));
+                    }
+                }
+            }
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            stack.push(child);
+        }
+    }
+}
+
 pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
     let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
 
@@ -312,6 +404,26 @@ pub(crate) fn extract(file: &str, src: &str) -> IrGraph {
             unresolved.push((from, callee_name));
         }
     }
+
+    // B5: recover call-like identifiers hidden inside macro invocations.
+    // tree-sitter-rust parses macro arguments as an opaque `token_tree`, so a
+    // function called only inside `vec![foo()]`, `assert_eq!(bar(), 1)`, etc. gets
+    // no `call_expression` node and would be reported as confidently dead. Walk
+    // every `macro_invocation`, scan its `token_tree` for `identifier (` adjacency,
+    // and attribute the recovered call to the enclosing function (or the File).
+    // These edges resolve the SAME way as real calls but are added to the same
+    // `edges`/`unresolved` buffers, so they share dedup and emit at
+    // Confidence::Likely — they can only DOWNGRADE a dead verdict, never clear it.
+    recover_macro_calls(
+        root,
+        src,
+        &g,
+        file,
+        file_id,
+        &name_to_id,
+        &mut edges,
+        &mut unresolved,
+    );
 
     // Deduplicate and emit Calls edges.
     edges.sort_unstable();
@@ -460,6 +572,55 @@ impl S { fn inherent_unused(&self) {} }
             .references()
             .iter()
             .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
+    }
+
+    #[test]
+    fn macro_hidden_call_is_recovered() {
+        // `helper()` is called only inside `vec![...]`, whose args tree-sitter
+        // parses as an opaque token_tree. Without B5 recovery there is no Calls
+        // edge and `helper` is reported as confidently dead.
+        let src = "fn helper() -> i32 { 1 }\nfn main() { let v = vec![helper()]; let _ = v; }\n";
+        let g = extract("m.rs", src);
+        let helper = g.symbols().iter().find(|s| s.name == "helper").unwrap().id;
+        assert!(
+            g.references()
+                .iter()
+                .any(|r| matches!(r.kind, RefKind::Calls) && r.to == helper),
+            "expected a recovered Calls edge to helper; refs: {:?}",
+            g.references()
+        );
+    }
+
+    #[test]
+    fn macro_recovered_call_is_likely() {
+        let src = "fn helper() -> i32 { 1 }\nfn main() { let v = vec![helper()]; let _ = v; }\n";
+        let g = extract("m.rs", src);
+        let helper = g.symbols().iter().find(|s| s.name == "helper").unwrap().id;
+        let edge = g
+            .references()
+            .iter()
+            .find(|r| matches!(r.kind, RefKind::Calls) && r.to == helper)
+            .expect("recovered call edge present");
+        assert_eq!(
+            edge.confidence,
+            Confidence::Likely,
+            "macro-recovered call must be Likely, never Certain"
+        );
+    }
+
+    #[test]
+    fn nested_macro_call_is_recovered() {
+        // `vec![a(b())]`: both `a` and `b` are inside nested token_trees.
+        let src = "fn a(x: i32) -> i32 { x }\nfn b() -> i32 { 2 }\nfn main() { let v = vec![a(b())]; let _ = v; }\n";
+        let g = extract("n.rs", src);
+        let id = |name: &str| g.symbols().iter().find(|s| s.name == name).unwrap().id;
+        let has_call_to = |to: SymbolId| {
+            g.references()
+                .iter()
+                .any(|r| matches!(r.kind, RefKind::Calls) && r.to == to)
+        };
+        assert!(has_call_to(id("a")), "expected recovered call to a");
+        assert!(has_call_to(id("b")), "expected recovered call to b (nested)");
     }
 
     #[test]
