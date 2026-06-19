@@ -189,54 +189,8 @@ pub fn analyze(graph: &IrGraph, config: &BoundaryConfig) -> Vec<Finding> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stratify_core::ir::{Reference, Symbol, SymbolId, Visibility};
+    use crate::test_support::{add_import, add_ref, add_sym, file_sym};
     use stratify_core::{RefKind, SymbolKind};
-
-    fn file_sym(g: &mut IrGraph, path: &str) -> SymbolId {
-        g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::File,
-            name: path.into(),
-            fqn: path.into(),
-            span: Span {
-                file: path.into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        })
-    }
-
-    fn import(g: &mut IrGraph, from: SymbolId, key: &str) {
-        let d = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::Dependency,
-            name: key.into(),
-            fqn: key.into(),
-            span: Span {
-                file: "x".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        g.add_reference(Reference {
-            from,
-            to: d,
-            kind: RefKind::Imports,
-            span: Span {
-                file: "x".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            confidence: Confidence::Certain,
-        });
-    }
 
     fn config() -> BoundaryConfig {
         let mut layers = std::collections::BTreeMap::new();
@@ -271,7 +225,7 @@ mod tests {
         let mut g = IrGraph::new();
         let m = file_sym(&mut g, "models/user.rb");
         file_sym(&mut g, "controllers/users.rb");
-        import(&mut g, m, "controllers/users.rb"); // models -> controllers (forbidden)
+        add_import(&mut g, m, "controllers/users.rb"); // models -> controllers (forbidden)
         let findings = analyze(&g, &config());
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule, "boundary");
@@ -284,7 +238,7 @@ mod tests {
         let mut g = IrGraph::new();
         file_sym(&mut g, "models/user.rb");
         let c = file_sym(&mut g, "controllers/users.rb");
-        import(&mut g, c, "models/user.rb"); // controllers -> models (allowed)
+        add_import(&mut g, c, "models/user.rb"); // controllers -> models (allowed)
         assert!(analyze(&g, &config()).is_empty());
     }
 
@@ -293,7 +247,7 @@ mod tests {
         let mut g = IrGraph::new();
         let m = file_sym(&mut g, "models/user.rb");
         file_sym(&mut g, "controllers/users.rb");
-        import(&mut g, m, "controllers/users.rb");
+        add_import(&mut g, m, "controllers/users.rb");
         assert!(analyze(&g, &BoundaryConfig::default()).is_empty());
     }
 
@@ -360,63 +314,29 @@ mod tests {
     #[test]
     fn analyze_works_through_a_resolved_preset() {
         // models/user.rb importing controllers/x.rb violates the rails preset.
-        use stratify_core::ir::{Reference, Span, Symbol, SymbolId, Visibility};
-        use stratify_core::{Confidence, RefKind, SymbolKind};
         let mut g = IrGraph::new();
-        let m = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::File,
-            name: "app/models/user.rb".into(),
-            fqn: "app/models/user.rb".into(),
-            span: Span {
-                file: "app/models/user.rb".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::File,
-            name: "app/controllers/x.rb".into(),
-            fqn: "app/controllers/x.rb".into(),
-            span: Span {
-                file: "app/controllers/x.rb".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        let dep = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::Dependency,
-            name: "app/controllers/x.rb".into(),
-            fqn: "app/controllers/x.rb".into(),
-            span: Span {
-                file: "x".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        g.add_reference(Reference {
-            from: m,
-            to: dep,
-            kind: RefKind::Imports,
-            span: Span {
-                file: "app/models/user.rb".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            confidence: Confidence::Certain,
-        });
+        let m = add_sym(
+            &mut g,
+            SymbolKind::File,
+            "app/models/user.rb",
+            "app/models/user.rb",
+            "app/models/user.rb",
+        );
+        add_sym(
+            &mut g,
+            SymbolKind::File,
+            "app/controllers/x.rb",
+            "app/controllers/x.rb",
+            "app/controllers/x.rb",
+        );
+        let dep = add_sym(
+            &mut g,
+            SymbolKind::Dependency,
+            "app/controllers/x.rb",
+            "app/controllers/x.rb",
+            "x",
+        );
+        add_ref(&mut g, m, dep, RefKind::Imports, "app/models/user.rb");
         let config = resolve(BoundaryConfig {
             preset: Some("rails".into()),
             ..Default::default()

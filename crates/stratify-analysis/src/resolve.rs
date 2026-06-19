@@ -298,111 +298,30 @@ mod tests {
 
     #[test]
     fn go_imports_resolves_by_suffix() {
-        use stratify_core::ir::{Reference, Span, Symbol, Visibility};
+        use crate::test_support::{add_ref, add_sym};
         let mut g = IrGraph::new();
         // package "b" exists (b/b.go), file in package "a" imports example.com/m/b
-        let a_file = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::File,
-            name: "a/a.go".into(),
-            fqn: "a".into(),
-            span: Span {
-                file: "a/a.go".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::File,
-            name: "b/b.go".into(),
-            fqn: "b".into(),
-            span: Span {
-                file: "b/b.go".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        let dep = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::Dependency,
-            name: "example.com/m/b".into(),
-            fqn: "example.com/m/b".into(),
-            span: Span {
-                file: "x".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        g.add_reference(Reference {
-            from: a_file,
-            to: dep,
-            kind: RefKind::Imports,
-            span: Span {
-                file: "a/a.go".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            confidence: Confidence::Certain,
-        });
+        let a_file = add_sym(&mut g, SymbolKind::File, "a/a.go", "a", "a/a.go");
+        add_sym(&mut g, SymbolKind::File, "b/b.go", "b", "b/b.go");
+        let dep = add_sym(
+            &mut g,
+            SymbolKind::Dependency,
+            "example.com/m/b",
+            "example.com/m/b",
+            "x",
+        );
+        add_ref(&mut g, a_file, dep, RefKind::Imports, "a/a.go");
         go_imports(&mut g);
         assert_eq!(g.symbol(dep).unwrap().name, "b");
     }
 
     #[test]
     fn go_imports_leaves_external_unchanged() {
-        use stratify_core::ir::{Reference, Span, Symbol, Visibility};
+        use crate::test_support::{add_ref, add_sym};
         let mut g = IrGraph::new();
-        let a_file = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::File,
-            name: "a/a.go".into(),
-            fqn: "a".into(),
-            span: Span {
-                file: "a/a.go".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        let dep = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::Dependency,
-            name: "fmt".into(),
-            fqn: "fmt".into(),
-            span: Span {
-                file: "x".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        g.add_reference(Reference {
-            from: a_file,
-            to: dep,
-            kind: RefKind::Imports,
-            span: Span {
-                file: "a/a.go".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            confidence: Confidence::Certain,
-        });
+        let a_file = add_sym(&mut g, SymbolKind::File, "a/a.go", "a", "a/a.go");
+        let dep = add_sym(&mut g, SymbolKind::Dependency, "fmt", "fmt", "x");
+        add_ref(&mut g, a_file, dep, RefKind::Imports, "a/a.go");
         go_imports(&mut g);
         assert_eq!(g.symbol(dep).unwrap().name, "fmt"); // no matching package dir -> unchanged
     }

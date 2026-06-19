@@ -140,49 +140,12 @@ mod tests {
         // Regression: File entrypoint + Defines traversal used to mark every
         // method reachable, so nothing was ever flagged. Defines is structural
         // containment, not a use-edge, and must not confer reachability.
-        use stratify_core::ir::{Reference, Span, Symbol, Visibility};
+        use crate::test_support::{add_ref, add_sym};
 
         let mut g = IrGraph::new();
-        let file_id = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::File,
-            name: "Foo.java".into(),
-            fqn: "Foo.java".into(),
-            span: Span {
-                file: "Foo.java".into(),
-                start_byte: 0,
-                end_byte: 100,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        let orphan = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::Function,
-            name: "orphan".into(),
-            fqn: "orphan".into(),
-            span: Span {
-                file: "Foo.java".into(),
-                start_byte: 0,
-                end_byte: 10,
-                start_line: 2,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        g.add_reference(Reference {
-            from: file_id,
-            to: orphan,
-            kind: RefKind::Defines,
-            span: Span {
-                file: "Foo.java".into(),
-                start_byte: 0,
-                end_byte: 10,
-                start_line: 2,
-            },
-            confidence: Confidence::Certain,
-        });
+        let file_id = add_sym(&mut g, SymbolKind::File, "Foo.java", "Foo.java", "Foo.java");
+        let orphan = add_sym(&mut g, SymbolKind::Function, "orphan", "orphan", "Foo.java");
+        add_ref(&mut g, file_id, orphan, RefKind::Defines, "Foo.java");
 
         let findings = analyze(&g);
         assert_eq!(

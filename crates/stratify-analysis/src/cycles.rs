@@ -96,62 +96,15 @@ fn canonical_cycle(nodes: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stratify_core::ir::{Reference, Symbol, SymbolId, Visibility};
-    use stratify_core::{RefKind, SymbolKind};
-
-    fn file_sym(g: &mut IrGraph, path: &str) -> SymbolId {
-        g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::File,
-            name: path.into(),
-            fqn: path.into(),
-            span: Span {
-                file: path.into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        })
-    }
-
-    fn dep(g: &mut IrGraph, from: SymbolId, key: &str) {
-        let d = g.add_symbol(Symbol {
-            id: SymbolId(0),
-            kind: SymbolKind::Dependency,
-            name: key.into(),
-            fqn: key.into(),
-            span: Span {
-                file: "x".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            visibility: Visibility::Unknown,
-            confidence: Confidence::Certain,
-        });
-        g.add_reference(Reference {
-            from,
-            to: d,
-            kind: RefKind::Imports,
-            span: Span {
-                file: "x".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 1,
-            },
-            confidence: Confidence::Certain,
-        });
-    }
+    use crate::test_support::{add_import, file_sym};
 
     #[test]
     fn detects_two_file_cycle() {
         let mut g = IrGraph::new();
         let a = file_sym(&mut g, "a.rb"); // exports key "a.rb"
         let b = file_sym(&mut g, "b.rb"); // exports key "b.rb"
-        dep(&mut g, a, "b.rb"); // a imports b
-        dep(&mut g, b, "a.rb"); // b imports a
+        add_import(&mut g, a, "b.rb"); // a imports b
+        add_import(&mut g, b, "a.rb"); // b imports a
         let findings = analyze(&g);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule, "cycle");
@@ -164,7 +117,7 @@ mod tests {
         let mut g = IrGraph::new();
         let a = file_sym(&mut g, "a.rb");
         let _b = file_sym(&mut g, "b.rb");
-        dep(&mut g, a, "b.rb"); // a -> b only
+        add_import(&mut g, a, "b.rb"); // a -> b only
         assert!(analyze(&g).is_empty());
     }
 
@@ -172,7 +125,7 @@ mod tests {
     fn unresolved_import_is_ignored() {
         let mut g = IrGraph::new();
         let a = file_sym(&mut g, "a.rb");
-        dep(&mut g, a, "nonexistent.rb"); // no matching export
+        add_import(&mut g, a, "nonexistent.rb"); // no matching export
         assert!(analyze(&g).is_empty());
     }
 
@@ -182,9 +135,9 @@ mod tests {
         let a = file_sym(&mut g, "a.rb");
         let b = file_sym(&mut g, "b.rb");
         let c = file_sym(&mut g, "c.rb");
-        dep(&mut g, a, "b.rb");
-        dep(&mut g, b, "c.rb");
-        dep(&mut g, c, "a.rb");
+        add_import(&mut g, a, "b.rb");
+        add_import(&mut g, b, "c.rb");
+        add_import(&mut g, c, "a.rb");
         let findings = analyze(&g);
         assert_eq!(findings.len(), 1, "one cycle, not one per entry point");
         assert!(findings[0].message.contains("a.rb -> b.rb -> c.rb"));

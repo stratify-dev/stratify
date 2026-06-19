@@ -24,8 +24,7 @@ pub fn render(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stratify_core::ir::Span;
-    use stratify_core::{Confidence, Finding, Severity};
+    use crate::test_support::sample_finding;
 
     #[test]
     fn empty_report_says_no_findings() {
@@ -35,18 +34,7 @@ mod tests {
 
     #[test]
     fn formats_a_finding_line() {
-        let r = Report::new(vec![Finding {
-            rule: "dead_code".into(),
-            severity: Severity::Warning,
-            message: "unused function `orphan`".into(),
-            span: Span {
-                file: "T.java".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 5,
-            },
-            confidence: Confidence::Certain,
-        }]);
+        let r = Report::new(vec![sample_finding()]);
         let out = render(&r);
         assert!(out.contains("warn  T.java:5  unused function `orphan`"));
         assert!(out.contains("1 finding(s)."));

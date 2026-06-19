@@ -8,23 +8,11 @@ pub fn render(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stratify_core::ir::Span;
-    use stratify_core::{Confidence, Finding, Severity};
+    use crate::test_support::sample_finding;
 
     #[test]
     fn renders_schema_version_and_finding() {
-        let report = Report::new(vec![Finding {
-            rule: "dead_code".into(),
-            severity: Severity::Warning,
-            message: "unused function `orphan`".into(),
-            span: Span {
-                file: "T.java".into(),
-                start_byte: 0,
-                end_byte: 1,
-                start_line: 5,
-            },
-            confidence: Confidence::Certain,
-        }]);
+        let report = Report::new(vec![sample_finding()]);
         let out = render(&report);
         assert!(out.contains("\"schema_version\": 1"));
         assert!(out.contains("\"rule\": \"dead_code\""));
