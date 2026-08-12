@@ -2,6 +2,8 @@
 
 **One binary. Six languages. Six analyses. Findings you can trust.**
 
+**Docs:** [stratify.dynaum.com](https://stratify.dynaum.com)
+
 Stratify reads your whole repository, builds one language-agnostic model of it, and runs six static analyses on that model. Java, Ruby, TypeScript, Python, Go, and Rust all go through the same engine and the same commands. You get the same report shape whether your codebase is a Rails monolith, a Spring service, a Go module, a Rust workspace, or a mixed-language platform.
 
 It runs on your laptop, in CI, inside your editor, next to your AI coding agent, and into your dashboards. No servers to run. No accounts to create.
