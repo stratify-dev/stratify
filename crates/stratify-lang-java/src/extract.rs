@@ -146,13 +146,18 @@ fn add_declaration(
     } else {
         name.clone()
     };
+    let visibility = if kind == SymbolKind::Function && has_public_modifier(decl_node) {
+        Visibility::Public
+    } else {
+        Visibility::Unknown
+    };
     let id = g.add_symbol(Symbol {
         id: SymbolId(0),
         kind,
         name: name.clone(),
         fqn,
         span: walk::span(decl_node, file),
-        visibility: Visibility::Unknown,
+        visibility,
         confidence: Confidence::Certain,
     });
     g.add_reference(Reference {
@@ -169,6 +174,29 @@ fn add_declaration(
         let cx = walk::cyclomatic(decl_node, src, &complexity_rules());
         g.set_complexity(id, cx - count_default_labels(decl_node));
     }
+}
+
+/// True if `decl_node` (a `method_declaration`) carries an explicit `public`
+/// modifier. Package-private (no modifier) and `private` both stay
+/// `Visibility::Unknown` - only `public` gets the reduced-confidence
+/// treatment in `DeadCodeMode::Library`, matching the actual accessibility
+/// gap (package-private and private are both invisible outside this
+/// compilation unit's own package/class, so there's no "unseen external
+/// caller" story for them the way there is for `public`).
+fn has_public_modifier(decl_node: Node) -> bool {
+    let mut cursor = decl_node.walk();
+    for child in decl_node.children(&mut cursor) {
+        if child.kind() != "modifiers" {
+            continue;
+        }
+        let mut mods_cursor = child.walk();
+        for m in child.children(&mut mods_cursor) {
+            if !m.is_named() && m.kind() == "public" {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// `switch_label` is a decision kind (see `complexity_rules`), and
@@ -388,6 +416,31 @@ mod tests {
         let g = extract("A.java", src);
         let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
         assert_eq!(g.complexity_of(m), Some(4));
+    }
+
+    #[test]
+    fn public_method_gets_public_visibility() {
+        // Only `main` is an auto-entrypoint for Java (marks_main_method_as_
+        // entrypoint); every other symbol is fully evaluated for reachability
+        // regardless of its own modifier. Visibility::Public doesn't change
+        // that reachability check by itself - it lets deadcode's
+        // DeadCodeMode::Library tier treat an unreached public method with
+        // reduced confidence instead of a flat Warning, mirroring the risk
+        // PMD's UnusedPrivateMethod rule already accounts for by only ever
+        // looking at private methods.
+        let src = "class A { public void pub_m() {} private void priv_m() {} \
+                   void pkg_m() {} }";
+        let g = extract("A.java", src);
+        let vis = |name: &str| {
+            g.symbols()
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap()
+                .visibility
+        };
+        assert_eq!(vis("pub_m"), Visibility::Public);
+        assert_eq!(vis("priv_m"), Visibility::Unknown);
+        assert_eq!(vis("pkg_m"), Visibility::Unknown);
     }
 
     #[test]
