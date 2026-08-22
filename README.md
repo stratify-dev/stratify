@@ -136,6 +136,10 @@ They all run in a single pass. Java, Ruby, TypeScript, Python, and Go get all si
 
 Dead-code detection resolves calls across files, so a function used only from another file shows as `possibly unused` rather than a false `unused`. Cycle and boundary detection understand package-level imports for Go packages and Python `__init__.py`, so they see real dependencies, not just file-to-file edges.
 
+Complexity is cyclomatic complexity: one path through the code is one point. A cognitive-complexity tool (clippy's `cognitive_complexity` lint, SonarQube) measures something related but numerically different — a `match`/`switch` with many arms scores high on paths-through-the-code but low on how-hard-is-this-to-read, since the arms read as one flat structure. Don't expect Stratify's number to match a cognitive-complexity tool's number on the same function.
+
+An unreached `public`/`export`/`pub` symbol might still be someone else's dependency, so by default it reports at reduced confidence (`possibly unused`, Info) instead of a full `unused` (Warning) — same treatment a low-confidence cross-file match already gets. Set `mode = "application"` under `[dead_code]` in `stratify.toml` for a repo nothing outside it imports from (a deployed service, not a published package): an unreached public symbol is then exactly as dead as a private one, reported at full strength.
+
 ## Six languages, one engine
 
 Java, Ruby, TypeScript, Python, and Go each get the full set of six analyses. Rust gets dead code, duplication, complexity, and churn hotspots today. Dependency cycles and layer boundaries for Rust need module/`use` resolution, which is on the roadmap. Adding a language adds one adapter and changes no analysis code, because every analysis reads the shared model, not the source.
