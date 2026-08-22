@@ -167,8 +167,33 @@ fn add_declaration(
     }
     if kind == SymbolKind::Function {
         let cx = walk::cyclomatic(decl_node, src, &complexity_rules());
-        g.set_complexity(id, cx);
+        g.set_complexity(id, cx - count_default_labels(decl_node));
     }
+}
+
+/// `switch_label` is a decision kind (see `complexity_rules`), and
+/// tree-sitter's Java grammar gives `case N:` and `default:` the same
+/// `switch_label` kind - the shared walker can't tell them apart by kind
+/// alone. A `default:` arm is a fallthrough, not an added decision point
+/// (PMD's `CyclomaticComplexity` and the common McCabe convention agree),
+/// so its contribution to `cyclomatic`'s count is subtracted back out here.
+fn count_default_labels(body: Node) -> u32 {
+    let mut count = 0;
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "switch_label" {
+            if let Some(first) = n.child(0) {
+                if !first.is_named() && first.kind() == "default" {
+                    count += 1;
+                }
+            }
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    count
 }
 
 /// Emit a Dependency symbol per import and an Imports edge from the file.
@@ -363,6 +388,20 @@ mod tests {
         let g = extract("A.java", src);
         let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
         assert_eq!(g.complexity_of(m), Some(4));
+    }
+
+    #[test]
+    fn switch_case_labels_count_but_default_does_not() {
+        // base 1 + two `case` labels = 3. The `default:` fallthrough is not
+        // an added decision point (matches PMD's CyclomaticComplexity and the
+        // common McCabe convention: a switch selects among the case values,
+        // the default arm is what happens when nothing else matched, not a
+        // new branch of its own).
+        let src = "class A { void m(int x) { switch (x) { \
+                   case 1: break; case 2: break; default: break; } } }";
+        let g = extract("A.java", src);
+        let m = g.symbols().iter().find(|s| s.name == "m").unwrap().id;
+        assert_eq!(g.complexity_of(m), Some(3));
     }
 
     #[test]
