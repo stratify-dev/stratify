@@ -16,9 +16,19 @@ fn sample_go_reports_dead_code() {
         "stdout: {stdout}"
     );
     assert!(stdout.contains("neverCalled"), "stdout: {stdout}");
-    // Exported is an entrypoint, so it must NOT appear in any finding.
     assert!(
-        !stdout.contains("Exported"),
-        "Exported should not be flagged: {stdout}"
+        stdout.contains("\"severity\": \"warning\""),
+        "neverCalled (unexported, unreached) must be a full Warning: {stdout}"
+    );
+    // Exported carries Visibility::Public, not a hard entrypoint, so an
+    // unreached one is still reported - at Info/Likely under the default
+    // library mode, not the Warning/Certain an unexported orphan gets.
+    assert!(
+        stdout.contains("possibly unused function `Exported`"),
+        "an unreached exported function should surface at reduced confidence: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"severity\": \"info\""),
+        "Exported must be Info, not a full Warning, under default library mode: {stdout}"
     );
 }
