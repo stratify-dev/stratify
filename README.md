@@ -284,7 +284,7 @@ from = "models"
 to = "jobs"
 ```
 
-With no `stratify.toml`, Stratify auto-detects a Rails app (an `app/controllers/` directory) or a Maven or Gradle project (`pom.xml` or `build.gradle`) and applies the matching preset. A project that matches no marker gets no boundary checks.
+With no `stratify.toml`, Stratify auto-detects a Rails app (an `app/controllers/` directory or a `config/routes.rb` file) or a Maven or Gradle project (`pom.xml` or `build.gradle`) and applies the matching preset. A project that matches no marker gets no boundary checks.
 
 ## Built to extend
 

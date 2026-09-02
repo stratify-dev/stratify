@@ -10,13 +10,6 @@ pub enum Confidence {
     Certain,
 }
 
-impl Confidence {
-    /// The weaker of two confidences. Used when combining edges along a path.
-    pub fn min_with(self, other: Confidence) -> Confidence {
-        self.min(other)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25,17 +18,5 @@ mod tests {
     fn ordering_is_unknown_lowest() {
         assert!(Confidence::Unknown < Confidence::Likely);
         assert!(Confidence::Likely < Confidence::Certain);
-    }
-
-    #[test]
-    fn min_with_picks_weaker() {
-        assert_eq!(
-            Confidence::Certain.min_with(Confidence::Unknown),
-            Confidence::Unknown
-        );
-        assert_eq!(
-            Confidence::Likely.min_with(Confidence::Certain),
-            Confidence::Likely
-        );
     }
 }
