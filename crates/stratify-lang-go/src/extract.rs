@@ -191,13 +191,27 @@ fn add_definition(
     decl_node: Node,
 ) {
     let name = walk::node_text(name_node, src).to_string();
+    // An exported (capitalized) name might be consumed by another package
+    // this scan can't see - Visibility::Public, not a hard entrypoint, so
+    // DeadCodeMode::Library can still report an unreached one at reduced
+    // confidence instead of staying silent forever. main/init are genuine
+    // runtime entrypoints regardless of export status and stay hard-marked.
+    let visibility = if kind == SymbolKind::Function
+        && name != "main"
+        && name != "init"
+        && is_exported_go(&name)
+    {
+        Visibility::Public
+    } else {
+        Visibility::Unknown
+    };
     let id = g.add_symbol(Symbol {
         id: SymbolId(0),
         kind,
         name: name.clone(),
         fqn: name.clone(),
         span: walk::span(decl_node, file),
-        visibility: Visibility::Unknown,
+        visibility,
         confidence: Confidence::Certain,
     });
     g.add_reference(Reference {
@@ -208,8 +222,7 @@ fn add_definition(
         confidence: Confidence::Certain,
     });
     if kind == SymbolKind::Function {
-        // Entrypoints: main, init, or exported (capitalized).
-        if name == "main" || name == "init" || is_exported_go(&name) {
+        if name == "main" || name == "init" {
             g.mark_entrypoint(id);
         }
         g.set_complexity(id, walk::cyclomatic(decl_node, src, &COMPLEXITY_RULES));
@@ -338,17 +351,32 @@ mod tests {
     }
 
     #[test]
-    fn main_init_and_exported_are_entrypoints() {
+    fn main_and_init_are_hard_entrypoints_exported_gets_public_visibility() {
+        // main/init are genuine runtime entrypoints - always reachable, so
+        // they stay hard-marked. An exported (capitalized) name used to get
+        // the same hard-entrypoint treatment (permanently invisible to
+        // dead-code detection), which is correct for a published library but
+        // a real false negative in an application-shaped repo: confirmed
+        // against golang.org/x/tools/cmd/deadcode during the
+        // tool-comparison exercise, which caught an exported-but-unreachable
+        // function Stratify's blanket protection missed. Exported now gets
+        // Visibility::Public and goes through the ordinary reachability
+        // check instead.
         let src =
             "package main\nfunc main() {}\nfunc init() {}\nfunc Exported() {}\nfunc helper() {}\n";
         let g = extract("m.go", src);
-        let id = |name: &str| g.symbols().iter().find(|s| s.name == name).unwrap().id;
+        let sym = |name: &str| g.symbols().iter().find(|s| s.name == name).unwrap();
         let eps = g.entrypoints();
-        assert!(eps.contains(&id("main")));
-        assert!(eps.contains(&id("init")));
-        assert!(eps.contains(&id("Exported")));
+        assert!(eps.contains(&sym("main").id));
+        assert!(eps.contains(&sym("init").id));
         assert!(
-            !eps.contains(&id("helper")),
+            !eps.contains(&sym("Exported").id),
+            "an exported function is no longer a hard entrypoint"
+        );
+        assert_eq!(sym("Exported").visibility, Visibility::Public);
+        assert_eq!(sym("helper").visibility, Visibility::Unknown);
+        assert!(
+            !eps.contains(&sym("helper").id),
             "unexported helper is not an entrypoint"
         );
     }

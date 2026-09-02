@@ -143,7 +143,7 @@ pub fn analyze_repo_with_stats(root: &Path) -> std::io::Result<(Report, ScanStat
     stratify_analysis::resolve::go_imports(&mut graph);
     stratify_analysis::resolve::promote_intra_file_calls(&mut graph);
 
-    let mut findings = deadcode::analyze(&graph);
+    let mut findings = deadcode::analyze(&graph, load_dead_code_mode(root));
     findings.extend(duplication::analyze(&graph, load_dup_min_tokens(root)));
     findings.extend(stratify_analysis::complexity::analyze(
         &graph,
@@ -180,6 +180,18 @@ fn load_ignore_globs(root: &Path) -> globset::GlobSet {
             stratify_analysis::ignore::ignore_globset(&cfg.ignore.paths)
         }
         Err(_) => globset::GlobSet::empty(),
+    }
+}
+
+/// Resolve `[dead_code] mode` from stratify.toml, defaulting to
+/// `DeadCodeMode::Library` (the historical behavior) when absent or unreadable.
+fn load_dead_code_mode(root: &Path) -> deadcode::DeadCodeMode {
+    match std::fs::read_to_string(root.join("stratify.toml")) {
+        Ok(text) => {
+            let cfg: deadcode::DeadCodeToml = toml::from_str(&text).unwrap_or_default();
+            cfg.dead_code.mode.unwrap_or_default()
+        }
+        Err(_) => deadcode::DeadCodeMode::default(),
     }
 }
 

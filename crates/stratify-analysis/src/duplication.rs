@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use stratify_core::ir::Span;
 use stratify_core::{Confidence, Finding, IrGraph, Severity};
 
@@ -66,16 +66,36 @@ pub fn analyze(graph: &IrGraph, min_tokens: usize) -> Vec<Finding> {
         if duplicated[s] && (s == 0 || !duplicated[s - 1]) {
             let group = &groups[&ids[s..s + k]];
 
-            // B2: exclude same-file occurrences that overlap or sit adjacent to
-            // s. Those are repetitive-ladder artifacts, not actionable clones.
+            // B2: exclude same-file occurrences reachable from `s` through a
+            // chain of near neighbors (each hop < k). A repetitive ladder
+            // (many near-identical branches in a row) produces exactly this
+            // shape: consecutive branches sit well within one window of each
+            // other, but a long enough ladder drifts the first and last
+            // occurrence past k tokens apart. Comparing only the pairwise
+            // distance from `s` missed that case - the whole chain is one
+            // self-similar structure, not a copy elsewhere, so it has to be
+            // suppressed as a connected component, not member-by-member.
+            let mut same_file: Vec<usize> = group
+                .iter()
+                .copied()
+                .filter(|&o| tokens[o].file == tokens[s].file)
+                .collect();
+            same_file.sort_unstable();
+            let s_idx = same_file.binary_search(&s).unwrap();
+            let mut lo = s_idx;
+            while lo > 0 && same_file[lo] - same_file[lo - 1] < k {
+                lo -= 1;
+            }
+            let mut hi = s_idx;
+            while hi + 1 < same_file.len() && same_file[hi + 1] - same_file[hi] < k {
+                hi += 1;
+            }
+            let self_chain: HashSet<usize> = same_file[lo..=hi].iter().copied().collect();
+
             let valid_others: Vec<usize> = group
                 .iter()
                 .copied()
-                .filter(|&o| {
-                    o != s
-                        && !(tokens[o].file == tokens[s].file
-                            && (o as isize - s as isize).abs() < k as isize)
-                })
+                .filter(|&o| o != s && !self_chain.contains(&o))
                 .collect();
 
             // No actionable copy remains: drop the finding.
@@ -215,6 +235,35 @@ mod tests {
             findings.len(),
             0,
             "overlapping same-file self-matches must be suppressed"
+        );
+    }
+
+    #[test]
+    fn long_ladder_self_chain_fully_suppressed() {
+        // A longer repetitive ladder than `overlapping_self_match_suppressed`
+        // covers: period-3 branches, repeated 8 times (24 tokens), k=10.
+        // With valid window starts 0..=14, the phase-0 group (every position
+        // whose 10-token window is byte-identical) is {0, 3, 6, 9, 12} - each
+        // consecutive hop is 3, always < k, so the whole chain is one
+        // connected self-similar structure. But position 0 and position 12
+        // are 12 tokens apart, >= k=10, so the old single-anchor "is o within
+        // k of s" check does not suppress that pair: B2's fix only ever
+        // compared each far member directly against the earliest occurrence,
+        // never asking whether that far member was still reachable from `s`
+        // through a chain of near neighbors. This reproduces the real B2
+        // regression seen independently in TypeScript and Rust 21-branch
+        // if/else-if ladders (a long enough ladder drifts past the
+        // token-distance guard).
+        let mut g = IrGraph::new();
+        let branch = ["IF", "ID", "RET"];
+        let stream: Vec<&str> = branch.iter().copied().cycle().take(24).collect();
+        push(&mut g, "ladder.rb", &stream, 1);
+        let findings = analyze(&g, 10);
+        assert_eq!(
+            findings.len(),
+            0,
+            "a fully-connected repetitive-ladder chain must be suppressed \
+             end to end, not just pairwise against the earliest occurrence: {findings:?}"
         );
     }
 

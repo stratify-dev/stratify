@@ -201,13 +201,22 @@ fn extract_declarations(
             continue;
         };
         let name = node_text(name_node, src).to_string();
+        // Exported symbols might be consumed by another module this scan
+        // can't see - Visibility::Public, not a hard entrypoint, so
+        // DeadCodeMode::Library can still report an unreached one at reduced
+        // confidence instead of staying silent forever.
+        let visibility = if is_exported(decl_node) {
+            Visibility::Public
+        } else {
+            Visibility::Unknown
+        };
         let id = g.add_symbol(Symbol {
             id: SymbolId(0),
             kind,
             name: name.clone(),
             fqn: name,
             span: span(decl_node, file),
-            visibility: Visibility::Unknown,
+            visibility,
             confidence: Confidence::Certain,
         });
         g.add_reference(Reference {
@@ -217,10 +226,6 @@ fn extract_declarations(
             span: span(decl_node, file),
             confidence: Confidence::Certain,
         });
-        // Exported symbols are entrypoints (reachable from other modules).
-        if is_exported(decl_node) {
-            g.mark_entrypoint(id);
-        }
         // Set complexity for functions.
         if kind == SymbolKind::Function {
             g.set_complexity(id, cyclomatic_ts(decl_node, src));
@@ -417,8 +422,17 @@ mod tests {
     }
 
     #[test]
-    fn file_and_exports_are_entrypoints() {
-        // File scope is always an entrypoint; an exported function is too.
+    fn file_is_an_entrypoint_and_exports_get_public_visibility() {
+        // File scope is always an entrypoint. An exported function used to be
+        // a hard entrypoint too (fully invisible to dead-code detection no
+        // matter what) - now it's tagged Visibility::Public instead and left
+        // to the ordinary reachability check, so DeadCodeMode::Library can
+        // still report it at reduced confidence if nothing calls it, rather
+        // than staying silent forever. That silence was a real false
+        // negative in application-shaped repos (confirmed against
+        // golang.org/x/tools/cmd/deadcode and knip during the
+        // tool-comparison exercise): an uncalled export in a real `main`
+        // program is exactly as dead as an uncalled private function.
         let src = "export function api() {}\nfunction helper() {}\n";
         let g = extract("m.ts", src);
         let file = g
@@ -427,13 +441,16 @@ mod tests {
             .find(|s| s.kind == SymbolKind::File)
             .unwrap()
             .id;
-        let api = g.symbols().iter().find(|s| s.name == "api").unwrap().id;
+        let api = g.symbols().iter().find(|s| s.name == "api").unwrap();
+        let helper = g.symbols().iter().find(|s| s.name == "helper").unwrap();
         let eps = g.entrypoints();
         assert!(eps.contains(&file));
         assert!(
-            eps.contains(&api),
-            "exported function should be an entrypoint"
+            !eps.contains(&api.id),
+            "an exported function is no longer a hard entrypoint"
         );
+        assert_eq!(api.visibility, Visibility::Public);
+        assert_eq!(helper.visibility, Visibility::Unknown);
     }
 
     #[test]

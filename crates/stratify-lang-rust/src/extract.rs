@@ -95,14 +95,16 @@ fn has_test_attribute(node: Node, src: &str) -> bool {
     false
 }
 
-/// `function_item`, any `pub` item, `#[test]`-annotated fn, or trait-impl method
-/// is an entrypoint. A Rust lib's public surface, tests, and trait methods are
-/// real entry points; without this every public function would be flagged dead.
+/// `main`, a `#[test]`-annotated fn, or a trait-impl method is a genuine,
+/// always-run entrypoint - reachable regardless of visibility, so these stay
+/// hard-marked. `pub` is handled separately (see `add_declaration`): a `pub`
+/// item might be consumed by an external crate this scan can't see, but
+/// unlike main/tests/trait-impls it isn't reachable *within* this scan, so it
+/// gets Visibility::Public and the ordinary reachability check instead of a
+/// hard mark - DeadCodeMode::Library still reports an unreached one, just at
+/// reduced confidence rather than staying permanently invisible.
 fn is_entrypoint(decl_node: Node, name: &str, src: &str) -> bool {
-    name == "main"
-        || has_visibility(decl_node)
-        || has_test_attribute(decl_node, src)
-        || in_trait_impl(decl_node)
+    name == "main" || has_test_attribute(decl_node, src) || in_trait_impl(decl_node)
 }
 
 /// Find the `function_item` that lexically encloses `node`, then resolve its
@@ -242,13 +244,18 @@ fn extract_symbols(
             continue;
         };
         let name = walk::node_text(name_node, src).to_string();
+        let visibility = if has_visibility(decl_node) {
+            Visibility::Public
+        } else {
+            Visibility::Unknown
+        };
         let id = g.add_symbol(Symbol {
             id: SymbolId(0),
             kind,
             name: name.clone(),
             fqn: name.clone(),
             span: walk::span(decl_node, file),
-            visibility: Visibility::Unknown,
+            visibility,
             confidence: Confidence::Certain,
         });
         g.add_reference(Reference {
@@ -288,6 +295,7 @@ fn extract_calls(
         r#"
         (call_expression function: (identifier) @callee) @call
         (call_expression function: (field_expression field: (field_identifier) @callee)) @call
+        (call_expression function: (scoped_identifier name: (identifier) @callee)) @call
         "#,
     )
     .expect("rust call query");
@@ -447,7 +455,17 @@ fn baz() {}
     }
 
     #[test]
-    fn main_pub_and_test_are_entrypoints_private_is_not() {
+    fn main_and_test_are_hard_entrypoints_pub_gets_public_visibility() {
+        // main, #[test]s, and trait-impl methods are genuine, always-run
+        // entrypoints - hard-marked regardless of visibility. `pub` used to
+        // get the same hard-entrypoint treatment (permanently invisible to
+        // dead-code detection), correct for a published lib crate's public
+        // surface but no longer the only way that risk is represented: `pub`
+        // now carries Visibility::Public and goes through the ordinary
+        // reachability check, so DeadCodeMode::Library can still report an
+        // unreached one at reduced confidence instead of staying silent
+        // forever (DeadCodeMode::Application, for a bin-only crate with no
+        // external consumers at all, reports it at full strength).
         let src = r#"
 fn main() {}
 
@@ -462,14 +480,19 @@ async fn async_test() {}
 fn helper() {}
 "#;
         let g = extract("m.rs", src);
-        let id = |name: &str| g.symbols().iter().find(|s| s.name == name).unwrap().id;
+        let sym = |name: &str| g.symbols().iter().find(|s| s.name == name).unwrap();
         let eps = g.entrypoints();
-        assert!(eps.contains(&id("main")));
-        assert!(eps.contains(&id("exported")));
-        assert!(eps.contains(&id("it_works")));
-        assert!(eps.contains(&id("async_test")));
+        assert!(eps.contains(&sym("main").id));
+        assert!(eps.contains(&sym("it_works").id));
+        assert!(eps.contains(&sym("async_test").id));
         assert!(
-            !eps.contains(&id("helper")),
+            !eps.contains(&sym("exported").id),
+            "pub is no longer a hard entrypoint"
+        );
+        assert_eq!(sym("exported").visibility, Visibility::Public);
+        assert_eq!(sym("helper").visibility, Visibility::Unknown);
+        assert!(
+            !eps.contains(&sym("helper").id),
             "private uncalled helper is not an entrypoint"
         );
     }
@@ -526,6 +549,34 @@ impl S { fn inherent_unused(&self) {} }
             .references()
             .iter()
             .any(|r| matches!(r.kind, RefKind::Calls) && r.from == a && r.to == b));
+    }
+
+    #[test]
+    fn qualified_path_call_is_recorded_as_unresolved() {
+        // `call_expression function:` was only ever matched as a plain
+        // `identifier` or a `field_expression` (method call). A call through
+        // a scoped/qualified path - `module::function()`, the ordinary way
+        // to call into another crate or module - has `function:` as a
+        // `scoped_identifier` instead, so the call query silently never
+        // matched it: no Calls edge, no unresolved-call entry, nothing.
+        // Found by self-scanning stratify's own multi-crate workspace after
+        // wiring `pub` to Visibility::Public: `stratify_telemetry::emit`,
+        // genuinely called from stratify-cli's main.rs, still showed up as
+        // unreached, because the qualified call site that reaches it was
+        // never recorded at all - not even as a low-confidence guess.
+        let src = "fn caller() { other_crate::helper(); }\n";
+        let g = extract("x.rs", src);
+        let caller = g.symbols().iter().find(|s| s.name == "caller").unwrap().id;
+        assert!(
+            g.unresolved_calls()
+                .iter()
+                .any(|(from, name)| *from == caller && name == "helper"),
+            "a qualified-path call must at least register as an unresolved \
+             call, the same as any other name the file-local resolver can't \
+             place, so the repo-wide cross-file resolver gets a chance to \
+             match it: {:?}",
+            g.unresolved_calls()
+        );
     }
 
     #[test]
