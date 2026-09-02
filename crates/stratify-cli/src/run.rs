@@ -186,13 +186,66 @@ fn load_ignore_globs(root: &Path) -> globset::GlobSet {
 /// Resolve `[dead_code] mode` from stratify.toml, defaulting to
 /// `DeadCodeMode::Library` (the historical behavior) when absent or unreadable.
 fn load_dead_code_mode(root: &Path) -> deadcode::DeadCodeMode {
-    match std::fs::read_to_string(root.join("stratify.toml")) {
+    let explicit = match std::fs::read_to_string(root.join("stratify.toml")) {
         Ok(text) => {
             let cfg: deadcode::DeadCodeToml = toml::from_str(&text).unwrap_or_default();
-            cfg.dead_code.mode.unwrap_or_default()
+            cfg.dead_code.mode
         }
-        Err(_) => deadcode::DeadCodeMode::default(),
+        Err(_) => None,
+    };
+    explicit.unwrap_or_else(|| autodetect_dead_code_mode(root))
+}
+
+/// With no explicit `[dead_code] mode`, guess Application from a project-
+/// layout signal that specifically means "not meant to be imported by code
+/// outside this repo" - never guess Application from an absence of evidence,
+/// only from a real, standard opt-out-of-distribution marker. Defaults to
+/// Library (today's historical behavior) when no such marker exists, which
+/// is deliberately the common case: Go, Java, and Python have no equally
+/// explicit, single-file "this isn't a library" signal yet, so they always
+/// fall through to Library here rather than a guess that could be wrong.
+fn autodetect_dead_code_mode(root: &Path) -> deadcode::DeadCodeMode {
+    use deadcode::DeadCodeMode;
+
+    // Rust: `publish = false` is Cargo's own standard opt-out of
+    // distribution. A crate with no `src/lib.rs` has nothing importable
+    // either way, regardless of `publish`. Both only apply to a real
+    // `[package]` manifest - a bare `[workspace]` root (this repo's own
+    // Cargo.toml is shaped exactly like this) has no single crate's
+    // publish/bin status to read, so it must not trigger this at all.
+    if let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) {
+        if let Ok(doc) = text.parse::<toml::Value>() {
+            if let Some(package) = doc.get("package") {
+                let publish_false =
+                    matches!(package.get("publish"), Some(toml::Value::Boolean(false)));
+                let bin_only =
+                    !root.join("src/lib.rs").is_file() && root.join("src/main.rs").is_file();
+                if publish_false || bin_only {
+                    return DeadCodeMode::Application;
+                }
+            }
+        }
     }
+
+    // Node/TypeScript: `"private": true` is npm's own standard opt-out of
+    // `npm publish`.
+    if let Ok(text) = std::fs::read_to_string(root.join("package.json")) {
+        if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) {
+            if doc.get("private") == Some(&serde_json::Value::Bool(true)) {
+                return DeadCodeMode::Application;
+            }
+        }
+    }
+
+    // Ruby: reuse the same Rails markers the boundary preset already
+    // auto-detects with (see `autodetect_preset` below). A Rails app is a
+    // deployed service, never a published gem, so the same signal that
+    // picks the `rails` boundary preset is trustworthy here too.
+    if root.join("app/controllers").is_dir() || root.join("config/routes.rb").is_file() {
+        return DeadCodeMode::Application;
+    }
+
+    DeadCodeMode::Library
 }
 
 /// Resolve the duplication `min_tokens` from `[duplication]` in stratify.toml,
@@ -304,6 +357,119 @@ mod tests {
     fn gate_empty_report_never_trips() {
         let report = Report::new(vec![]);
         assert!(!gate(&report, Severity::Info));
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("stratify-autodetect-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn cargo_publish_false_detects_application_mode() {
+        let dir = temp_dir("cargo-publish-false");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\npublish = false\n",
+        )
+        .unwrap();
+        assert_eq!(
+            autodetect_dead_code_mode(&dir),
+            deadcode::DeadCodeMode::Application
+        );
+    }
+
+    #[test]
+    fn cargo_bin_only_no_lib_detects_application_mode() {
+        let dir = temp_dir("cargo-bin-only");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        assert_eq!(
+            autodetect_dead_code_mode(&dir),
+            deadcode::DeadCodeMode::Application
+        );
+    }
+
+    #[test]
+    fn cargo_lib_crate_stays_library_mode() {
+        let dir = temp_dir("cargo-lib-crate");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+        assert_eq!(
+            autodetect_dead_code_mode(&dir),
+            deadcode::DeadCodeMode::Library
+        );
+    }
+
+    #[test]
+    fn cargo_workspace_root_with_no_package_table_stays_library_mode() {
+        // A pure `[workspace]` manifest (this repo's own root Cargo.toml is
+        // shaped exactly like this) has no single crate's publish/bin status
+        // to read - must not guess Application from that.
+        let dir = temp_dir("cargo-workspace-root");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            autodetect_dead_code_mode(&dir),
+            deadcode::DeadCodeMode::Library
+        );
+    }
+
+    #[test]
+    fn package_json_private_true_detects_application_mode() {
+        let dir = temp_dir("package-json-private");
+        std::fs::write(dir.join("package.json"), "{\"private\": true}\n").unwrap();
+        assert_eq!(
+            autodetect_dead_code_mode(&dir),
+            deadcode::DeadCodeMode::Application
+        );
+    }
+
+    #[test]
+    fn package_json_without_private_stays_library_mode() {
+        let dir = temp_dir("package-json-public");
+        std::fs::write(
+            dir.join("package.json"),
+            "{\"name\": \"x\", \"version\": \"1.0.0\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            autodetect_dead_code_mode(&dir),
+            deadcode::DeadCodeMode::Library
+        );
+    }
+
+    #[test]
+    fn rails_markers_detect_application_mode() {
+        let dir = temp_dir("rails-markers");
+        std::fs::create_dir_all(dir.join("app/controllers")).unwrap();
+        assert_eq!(
+            autodetect_dead_code_mode(&dir),
+            deadcode::DeadCodeMode::Application
+        );
+    }
+
+    #[test]
+    fn no_markers_defaults_to_library_mode() {
+        let dir = temp_dir("no-markers");
+        assert_eq!(
+            autodetect_dead_code_mode(&dir),
+            deadcode::DeadCodeMode::Library
+        );
     }
 }
 
