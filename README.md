@@ -140,6 +140,8 @@ Complexity is cyclomatic complexity: one path through the code is one point. A c
 
 An unreached `public`/`export`/`pub` symbol might still be someone else's dependency, so by default it reports at reduced confidence (`possibly unused`, Info) instead of a full `unused` (Warning) — same treatment a low-confidence cross-file match already gets. Set `mode = "application"` under `[dead_code]` in `stratify.toml` for a repo nothing outside it imports from (a deployed service, not a published package): an unreached public symbol is then exactly as dead as a private one, reported at full strength.
 
+With no `stratify.toml`, Stratify guesses `application` mode from an explicit "not meant to be distributed" marker: Rust's `Cargo.toml` `publish = false` or a crate with no `src/lib.rs`, npm's `package.json` `"private": true`, or a detected Rails app. Anything else defaults to `library` mode, unchanged. Only a real opt-out marker triggers the guess — Go, Java, and Python have no equally explicit single-file signal yet, so they always default to `library` until one is added.
+
 ## Six languages, one engine
 
 Java, Ruby, TypeScript, Python, and Go each get the full set of six analyses. Rust gets dead code, duplication, complexity, and churn hotspots today. Dependency cycles and layer boundaries for Rust need module/`use` resolution, which is on the roadmap. Adding a language adds one adapter and changes no analysis code, because every analysis reads the shared model, not the source.
@@ -158,13 +160,13 @@ Drop Stratify into any workflow as a gate:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@v0.5.0
+- uses: stratify-dev/stratify@v0.6.0
   with:
     path: .
     fail-on: warning
 ```
 
-The step fails the job when at least one finding meets or exceeds the `fail-on` threshold. Pin to a released tag for stable runs, for example `@v0.5.0`. `@main` tracks the latest. The Action downloads a prebuilt binary, so it starts in seconds.
+The step fails the job when at least one finding meets or exceeds the `fail-on` threshold. Pin to a released tag for stable runs, for example `@v0.6.0`. `@main` tracks the latest. The Action downloads a prebuilt binary, so it starts in seconds.
 
 ### Action inputs
 
@@ -186,7 +188,7 @@ Upload it to GitHub code scanning:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: stratify-dev/stratify@v0.5.0
+- uses: stratify-dev/stratify@v0.6.0
   with:
     fail-on: never
 - run: stratify check . --format sarif > stratify.sarif

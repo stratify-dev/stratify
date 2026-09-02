@@ -7,6 +7,30 @@ and versioning follows [Semantic Versioning](https://semver.org/) (pre-1.0,
 so a minor bump can still carry a behavior change; patch bumps stay
 backward-compatible).
 
+## [0.6.0] - 2026-09-01
+
+### Added
+- `[dead_code] mode` auto-detects `application` from a real "not meant to
+  be distributed" marker when `stratify.toml` doesn't set it explicitly:
+  Rust's `Cargo.toml` `publish = false` or a crate with no `src/lib.rs`,
+  npm's `package.json` `"private": true`, or a detected Rails app (reusing
+  the same markers the `rails` boundary preset already auto-detects with).
+  Anything else still defaults to `library` mode. Go, Java, and Python have
+  no equally explicit single-file signal yet, so they always fall through
+  to `library` rather than risk a wrong guess.
+
+  This changes default output for repos matching one of those markers and
+  carrying no `stratify.toml`: an unreached public symbol now reports at
+  full Warning strength instead of the reduced-confidence Info tier
+  `library` mode gives it.
+
+### Fixed
+- The Rails boundary-preset auto-detection section in the README omitted
+  `config/routes.rb` as a marker (the actual check in `run.rs` has always
+  looked for either `app/controllers/` or `config/routes.rb`).
+- Removed `Confidence::min_with`, which was never called anywhere outside
+  its own unit test.
+
 ## [0.5.0] - 2026-09-01
 
 Fixes from a tool-comparison exercise: hand-built fixtures covering all six
